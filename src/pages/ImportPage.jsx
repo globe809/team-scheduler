@@ -1,5 +1,5 @@
 import { useState, useRef } from 'react'
-import { collection, getDocs, addDoc, updateDoc, doc, query, where } from 'firebase/firestore'
+import { collection, getDocs, addDoc, updateDoc, doc } from 'firebase/firestore'
 import { db } from '../firebase'
 import { useAuth } from '../contexts/AuthContext'
 import { parseTradeShowExcel } from '../utils/excelParser'
@@ -8,7 +8,7 @@ export default function ImportPage() {
   const { isAdmin } = useAuth()
   const [file, setFile] = useState(null)
   const [preview, setPreview] = useState(null)
-  const [importing, setSaving] = useState(false)
+  const [importing, setImporting] = useState(false)
   const [result, setResult] = useState(null)
   const [error, setError] = useState('')
   const fileRef = useRef()
@@ -28,7 +28,7 @@ export default function ImportPage() {
 
   async function handleImport() {
     if (!preview) return
-    setSaving(true)
+    setImporting(true)
     setResult(null)
     try {
       const existingSnap = await getDocs(collection(db, 'projects'))
@@ -44,7 +44,7 @@ export default function ImportPage() {
         if (!row.startDate && !row.datePending) { skipped++; continue }
         if (existing[row.name]) {
           const current = existing[row.name]
-          const updates = {
+          await updateDoc(doc(db, 'projects', current.id), {
             startDate: row.startDate || current.startDate,
             endDate: row.endDate || current.endDate,
             location: row.location || current.location,
@@ -54,8 +54,7 @@ export default function ImportPage() {
             year: row.year,
             datePending: row.datePending || false,
             updatedAt: new Date().toISOString(),
-          }
-          await updateDoc(doc(db, 'projects', current.id), updates)
+          })
           updated++
         } else {
           await addDoc(collection(db, 'projects'), {
@@ -70,22 +69,11 @@ export default function ImportPage() {
       setResult({ added, updated, skipped, total: preview.length })
       setPreview(null)
       setFile(null)
-      setSaving(false)
     } catch (err) {
       console.error('匯入失敗:', err)
       alert('匯入失敗：' + err.message)
-      setSaving(false)
     }
-  }
-
-      setResult({ added, updated, skipped, total: preview.length })
-      setPreview(null)
-      setFile(null)
-    } catch (e) {
-      setError('匯入失敗：' + e.message)
-    } finally {
-      setSaving(false)
-    }
+    setImporting(false)
   }
 
   if (!isAdmin) {
@@ -101,14 +89,12 @@ export default function ImportPage() {
 
   return (
     <div className="flex flex-col h-full">
-      {/* Header */}
       <div className="px-6 py-4 border-b bg-white">
         <h2 className="text-xl font-bold text-gray-800">匯入 Excel</h2>
         <p className="text-sm text-gray-400">上傳秀展清單 .xlsx 檔案，系統自動新增或更新秀展資料（不影響已指派的人員）</p>
       </div>
 
       <div className="flex-1 overflow-auto p-6 max-w-2xl">
-        {/* Upload area */}
         <div
           className={`border-2 border-dashed rounded-xl p-10 text-center cursor-pointer transition-colors ${file ? 'border-blue-400 bg-blue-50' : 'border-gray-200 hover:border-gray-300 bg-white'}`}
           onClick={() => fileRef.current?.click()}
@@ -135,7 +121,6 @@ export default function ImportPage() {
           <div className="mt-4 bg-red-50 border border-red-200 rounded-lg p-4 text-sm text-red-700">{error}</div>
         )}
 
-        {/* Preview */}
         {preview && preview.length > 0 && (
           <div className="mt-5">
             <div className="flex items-center justify-between mb-3">
@@ -178,12 +163,11 @@ export default function ImportPage() {
               </div>
             </div>
             <p className="text-xs text-gray-400 mt-2">
-              ⚠️ 現有秀展（相同名稱）只會更新日期、地點等欄位，不會影響已指派的設計師和 Planner。
+              ⚠️ 現有秀展（相同名稱）只會更新日期、地點等欄位，不影響已指派的設計師和 Planner。
             </p>
           </div>
         )}
 
-        {/* Result */}
         {result && (
           <div className="mt-5 bg-emerald-50 border border-emerald-200 rounded-xl p-5">
             <h3 className="font-semibold text-emerald-800 mb-3">✅ 匯入完成</h3>
@@ -204,7 +188,6 @@ export default function ImportPage() {
           </div>
         )}
 
-        {/* Instructions */}
         <div className="mt-6 bg-gray-50 rounded-xl p-5 text-sm text-gray-600">
           <h3 className="font-semibold text-gray-700 mb-3">📋 使用說明</h3>
           <ol className="space-y-2 list-decimal list-inside">
@@ -213,7 +196,6 @@ export default function ImportPage() {
             <li>將下載的檔案拖拉到上方區域，或點擊選擇</li>
             <li>確認預覽內容後，點擊「確認匯入」</li>
           </ol>
-          <p className="mt-3 text-gray-400">系統會自動根據日期格式（如 1/11~1/13）加入正確年份，跨年情形也會自動判斷。</p>
         </div>
       </div>
     </div>
