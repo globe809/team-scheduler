@@ -43,7 +43,6 @@ export default function ImportPage() {
       for (const row of preview) {
         if (!row.startDate && !row.datePending) { skipped++; continue }
         if (existing[row.name]) {
-          // Update: only update non-assignment fields
           const current = existing[row.name]
           const updates = {
             startDate: row.startDate || current.startDate,
@@ -59,7 +58,6 @@ export default function ImportPage() {
           await updateDoc(doc(db, 'projects', current.id), updates)
           updated++
         } else {
-          // Add new
           await addDoc(collection(db, 'projects'), {
             ...row,
             createdAt: new Date().toISOString(),
@@ -68,6 +66,17 @@ export default function ImportPage() {
           added++
         }
       }
+
+      setResult({ added, updated, skipped, total: preview.length })
+      setPreview(null)
+      setFile(null)
+      setSaving(false)
+    } catch (err) {
+      console.error('匯入失敗:', err)
+      alert('匯入失敗：' + err.message)
+      setSaving(false)
+    }
+  }
 
       setResult({ added, updated, skipped, total: preview.length })
       setPreview(null)
