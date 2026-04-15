@@ -46,7 +46,10 @@ export default function PeoplePage() {
         await addDoc(collection(db, 'people'), { ...data, createdAt: new Date().toISOString() })
       }
       setShowModal(false)
-    } finally {
+      setSaving(false)
+    } catch (err) {
+      console.error('儲存失敗:', err)
+      alert('儲存失敗：' + err.message)
       setSaving(false)
     }
   }
