@@ -3,6 +3,14 @@ import { collection, onSnapshot, doc, getDoc } from 'firebase/firestore'
 import { db } from '../firebase'
 import { buildBarsForPerson, TYPE_COLORS, TYPE_LABELS, DEFAULT_RULES } from '../utils/milestoneUtils'
 
+const LEAVE_COLORS = {
+  '特休': '#8b5cf6',
+  '病假': '#f59e0b',
+  '事假': '#6b7280',
+  '出差': '#0ea5e9',
+  '其他': '#d1d5db',
+}
+
 const MONTHS = ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月']
 const LANE_HEIGHT = 28   // height per bar lane
 const LANE_GAP = 4       // gap between lanes
@@ -55,6 +63,7 @@ const BUSY_COLORS = ['transparent', '#bfdbfe', '#60a5fa', '#f97316', '#ef4444']
 export default function GanttPage() {
   const [people, setPeople] = useState([])
   const [projects, setProjects] = useState([])
+  const [leaves, setLeaves] = useState([])
   const [rules, setRules] = useState(DEFAULT_RULES)
   const [year, setYear] = useState(new Date().getFullYear())
   const [tooltip, setTooltip] = useState(null)
@@ -68,12 +77,15 @@ export default function GanttPage() {
     const unsub2 = onSnapshot(collection(db, 'projects'), snap => {
       setProjects(snap.docs.map(d => ({ id: d.id, ...d.data() })))
     })
+    const unsub3 = onSnapshot(collection(db, 'leaves'), snap => {
+      setLeaves(snap.docs.map(d => ({ id: d.id, ...d.data() })))
+    })
     const loadRules = async () => {
       const rDoc = await getDoc(doc(db, 'settings', 'milestoneRules'))
       if (rDoc.exists()) setRules({ ...DEFAULT_RULES, ...rDoc.data() })
     }
     loadRules()
-    return () => { unsub1(); unsub2() }
+    return () => { unsub1(); unsub2(); unsub3() }
   }, [])
 
   const viewStart = new Date(year, 0, 1)
@@ -104,6 +116,8 @@ export default function GanttPage() {
   const todayOffset = dayOffset(new Date())
   const isCurrentYear = year === new Date().getFullYear()
 
+  const LEAVE_BAR_HEIGHT = 14
+
   // Pre-compute per person
   const personData = filteredPeople.map(person => {
     const bars = buildBarsForPerson(person.id, projects, rules).filter(b => {
@@ -112,9 +126,14 @@ export default function GanttPage() {
     })
     const { lanes, barLane } = calculateLanes(bars)
     const numLanes = Math.max(1, lanes.length)
-    const rowH = Math.max(MIN_ROW_HEIGHT, numLanes * (LANE_HEIGHT + LANE_GAP) + ROW_PADDING + BUSY_HEIGHT + 6)
+    const personLeaves = leaves.filter(l => l.personId === person.id && l.startDate && l.endDate).filter(l => {
+      const s = new Date(l.startDate), e = new Date(l.endDate)
+      return s <= viewEnd && e >= viewStart
+    })
+    const hasLeaves = personLeaves.length > 0
+    const rowH = Math.max(MIN_ROW_HEIGHT, numLanes * (LANE_HEIGHT + LANE_GAP) + ROW_PADDING + BUSY_HEIGHT + 6 + (hasLeaves ? LEAVE_BAR_HEIGHT + 4 : 0))
     const busyWeeks = calcBusyWeeks(bars, viewStart, totalDays)
-    return { person, bars, barLane, numLanes, rowH, busyWeeks }
+    return { person, bars, barLane, numLanes, rowH, busyWeeks, personLeaves }
   })
 
   return (
@@ -193,7 +212,7 @@ export default function GanttPage() {
               </div>
 
               {/* People rows */}
-              {personData.map(({ person, bars, barLane, numLanes, rowH, busyWeeks }, pi) => (
+              {personData.map(({ person, bars, barLane, numLanes, rowH, busyWeeks, personLeaves }, pi) => (
                 <div key={person.id} className={`flex border-b ${pi % 2 === 0 ? 'bg-white' : 'bg-gray-50/60'}`}
                   style={{ height: rowH }}>
 
@@ -239,6 +258,39 @@ export default function GanttPage() {
                         })}
                       </div>
                     )}
+
+                    {/* Leave bars strip */}
+                    {personLeaves.map((leave, li) => {
+                      const clampedStart = new Date(Math.max(new Date(leave.startDate), viewStart))
+                      const clampedEnd = new Date(Math.min(new Date(leave.endDate), viewEnd))
+                      const leftPct = pct(dayOffset(clampedStart))
+                      const widthPct = pct(Math.round((clampedEnd - clampedStart) / 86400000) + 1)
+                      if (widthPct <= 0) return null
+                      const leaveColor = LEAVE_COLORS[leave.type] || '#d1d5db'
+                      const leaveTopPx = rowH - BUSY_HEIGHT - LEAVE_BAR_HEIGHT - 8
+                      return (
+                        <div key={leave.id}
+                          className="absolute rounded cursor-pointer hover:brightness-110 flex items-center overflow-hidden"
+                          style={{
+                            left: `${leftPct}%`,
+                            width: `${widthPct}%`,
+                            height: LEAVE_BAR_HEIGHT,
+                            top: leaveTopPx,
+                            backgroundColor: leaveColor,
+                            opacity: 0.75,
+                            zIndex: 4,
+                            minWidth: 4,
+                            backgroundImage: `repeating-linear-gradient(45deg, transparent, transparent 3px, rgba(255,255,255,0.3) 3px, rgba(255,255,255,0.3) 6px)`,
+                          }}
+                          onMouseEnter={(e) => setTooltip({ leave, x: e.clientX, y: e.clientY })}
+                          onMouseLeave={() => setTooltip(null)}
+                        >
+                          <span className="text-white text-xs font-medium px-1.5 truncate select-none leading-none" style={{ fontSize: 10 }}>
+                            {leave.type}
+                          </span>
+                        </div>
+                      )
+                    })}
 
                     {/* Bars stacked in lanes */}
                     {bars.map((bar, bi) => {
@@ -297,7 +349,7 @@ export default function GanttPage() {
       </div>
 
       {/* Tooltip */}
-      {tooltip && (
+      {tooltip && tooltip.bar && (
         <div className="fixed z-50 bg-gray-900 text-white text-xs rounded-xl p-3 shadow-2xl pointer-events-none"
           style={{ left: tooltip.x + 14, top: tooltip.y - 10, maxWidth: 240 }}>
           <p className="font-semibold text-sm mb-1">{tooltip.bar.projectName}</p>
@@ -318,6 +370,17 @@ export default function GanttPage() {
               ))}
             </div>
           )}
+        </div>
+      )}
+      {tooltip && tooltip.leave && (
+        <div className="fixed z-50 bg-gray-900 text-white text-xs rounded-xl p-3 shadow-2xl pointer-events-none"
+          style={{ left: tooltip.x + 14, top: tooltip.y - 10, maxWidth: 220 }}>
+          <div className="flex items-center gap-2 mb-1">
+            <div className="w-2 h-2 rounded-full" style={{ backgroundColor: LEAVE_COLORS[tooltip.leave.type] || '#d1d5db' }} />
+            <p className="font-semibold text-sm">{tooltip.leave.personName} · {tooltip.leave.type}</p>
+          </div>
+          <p className="text-gray-400">{tooltip.leave.startDate} – {tooltip.leave.endDate}</p>
+          {tooltip.leave.note && <p className="text-gray-400 mt-1">{tooltip.leave.note}</p>}
         </div>
       )}
     </div>

@@ -4,7 +4,7 @@ import { db } from '../firebase'
 import { useAuth } from '../contexts/AuthContext'
 import { TYPE_LABELS, TYPE_COLORS, TYPE_BG, DEFAULT_RULES, getWorkStart } from '../utils/milestoneUtils'
 
-const EVENT_SUBTYPES = ['尾牙', '春酒', '媒體春酒', 'HBL']
+const EVENT_SUBTYPES = ['尾牙', '春酒', '媒體春酒', 'HBL', '灣聲音樂會']
 const AWARD_SUBTYPES = ['25大國際品牌', '台灣精品獎', 'BC Award', '體育推手獎', 'EE Awards']
 
 const emptyForm = {

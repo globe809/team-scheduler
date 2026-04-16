@@ -6,16 +6,28 @@ import { TYPE_COLORS, TYPE_LABELS, TYPE_BG } from '../utils/milestoneUtils'
 const MONTHS_LABEL = ['一月', '二月', '三月', '四月', '五月', '六月', '七月', '八月', '九月', '十月', '十一月', '十二月']
 const WEEKDAYS = ['日', '一', '二', '三', '四', '五', '六']
 
+const LEAVE_COLORS = {
+  '特休': '#8b5cf6',
+  '病假': '#f59e0b',
+  '事假': '#6b7280',
+  '出差': '#0ea5e9',
+  '其他': '#d1d5db',
+}
+
 export default function CalendarPage() {
   const [projects, setProjects] = useState([])
+  const [leaves, setLeaves] = useState([])
   const [today] = useState(new Date())
   const [viewDate, setViewDate] = useState(new Date(today.getFullYear(), today.getMonth(), 1))
 
   useEffect(() => {
-    const unsub = onSnapshot(collection(db, 'projects'), snap => {
+    const unsub1 = onSnapshot(collection(db, 'projects'), snap => {
       setProjects(snap.docs.map(d => ({ id: d.id, ...d.data() })))
     })
-    return unsub
+    const unsub2 = onSnapshot(collection(db, 'leaves'), snap => {
+      setLeaves(snap.docs.map(d => ({ id: d.id, ...d.data() })))
+    })
+    return () => { unsub1(); unsub2() }
   }, [])
 
   const year = viewDate.getFullYear()
@@ -34,6 +46,17 @@ export default function CalendarPage() {
       if (!p.startDate || !p.endDate) return false
       const s = new Date(p.startDate)
       const e = new Date(p.endDate)
+      return date >= s && date <= e
+    })
+  }
+
+  // Get leaves active on a given day
+  function getLeavesForDay(day) {
+    const date = new Date(year, month, day)
+    return leaves.filter(l => {
+      if (!l.startDate || !l.endDate) return false
+      const s = new Date(l.startDate)
+      const e = new Date(l.endDate)
       return date >= s && date <= e
     })
   }
@@ -76,6 +99,12 @@ export default function CalendarPage() {
           {cells.map((day, i) => {
             if (day === null) return <div key={`empty-${i}`} />
             const dayProjects = getProjectsForDay(day)
+            const dayLeaves = getLeavesForDay(day)
+            const totalItems = dayProjects.length + dayLeaves.length
+            const shownProjects = dayProjects.slice(0, 3)
+            const remainingSlots = 3 - shownProjects.length
+            const shownLeaves = dayLeaves.slice(0, Math.max(0, remainingSlots))
+            const overflow = totalItems - shownProjects.length - shownLeaves.length
             return (
               <div key={day}
                 className={`min-h-24 rounded-lg p-1.5 border ${isToday(day) ? 'border-blue-400 bg-blue-50' : 'border-gray-100 bg-white hover:border-gray-300'}`}>
@@ -83,7 +112,7 @@ export default function CalendarPage() {
                   {day}
                 </p>
                 <div className="space-y-0.5">
-                  {dayProjects.slice(0, 3).map(p => (
+                  {shownProjects.map(p => (
                     <div key={p.id}
                       className="text-xs px-1.5 py-0.5 rounded truncate text-white font-medium"
                       style={{ backgroundColor: TYPE_COLORS[p.type] || '#6B7280' }}
@@ -91,8 +120,19 @@ export default function CalendarPage() {
                       {p.name}
                     </div>
                   ))}
-                  {dayProjects.length > 3 && (
-                    <p className="text-xs text-gray-400 pl-1">+{dayProjects.length - 3} 更多</p>
+                  {shownLeaves.map(l => (
+                    <div key={l.id}
+                      className="text-xs px-1.5 py-0.5 rounded truncate text-white font-medium"
+                      style={{
+                        backgroundColor: LEAVE_COLORS[l.type] || '#d1d5db',
+                        backgroundImage: 'repeating-linear-gradient(45deg, transparent, transparent 2px, rgba(255,255,255,0.25) 2px, rgba(255,255,255,0.25) 4px)',
+                      }}
+                      title={`${l.personName} ${l.type}`}>
+                      🏖 {l.personName}
+                    </div>
+                  ))}
+                  {overflow > 0 && (
+                    <p className="text-xs text-gray-400 pl-1">+{overflow} 更多</p>
                   )}
                 </div>
               </div>
@@ -101,11 +141,19 @@ export default function CalendarPage() {
         </div>
 
         {/* Legend */}
-        <div className="flex items-center gap-4 mt-4 px-2">
+        <div className="flex items-center gap-4 mt-4 px-2 flex-wrap">
           {Object.entries(TYPE_LABELS).map(([type, label]) => (
             <div key={type} className="flex items-center gap-1.5">
               <div className="w-3 h-3 rounded-sm" style={{ backgroundColor: TYPE_COLORS[type] }} />
               <span className="text-xs text-gray-500">{label}</span>
+            </div>
+          ))}
+          <div className="w-px h-4 bg-gray-200 mx-1" />
+          {Object.entries(LEAVE_COLORS).map(([type, color]) => (
+            <div key={type} className="flex items-center gap-1.5">
+              <div className="w-3 h-3 rounded-sm"
+                style={{ backgroundColor: color, backgroundImage: 'repeating-linear-gradient(45deg, transparent, transparent 2px, rgba(255,255,255,0.4) 2px, rgba(255,255,255,0.4) 4px)' }} />
+              <span className="text-xs text-gray-500">{type}</span>
             </div>
           ))}
         </div>
