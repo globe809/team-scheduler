@@ -24,6 +24,7 @@ export default function ProjectsPage() {
   const [form, setForm] = useState(emptyForm)
   const [filterType, setFilterType] = useState('all')
   const [filterYear, setFilterYear] = useState(new Date().getFullYear())
+  const [showCompleted, setShowCompleted] = useState(false)
   const [saving, setSaving] = useState(false)
   const [deleteConfirm, setDeleteConfirm] = useState(null)
 
@@ -99,6 +100,7 @@ export default function ProjectsPage() {
   const filtered = projects
     .filter(p => filterType === 'all' || p.type === filterType)
     .filter(p => !p.year || p.year === filterYear)
+    .filter(p => showCompleted || p.status !== '已結束')
     .sort((a, b) => (a.startDate || '').localeCompare(b.startDate || ''))
 
   const years = [...new Set(projects.map(p => p.year).filter(Boolean))].sort()
@@ -131,6 +133,11 @@ export default function ProjectsPage() {
               </button>
             ))}
           </div>
+          <button
+            onClick={() => setShowCompleted(v => !v)}
+            className={`px-3 py-2 text-sm rounded-lg border transition-colors ${showCompleted ? 'bg-gray-200 text-gray-700 border-gray-300' : 'bg-white text-gray-500 border-gray-200 hover:bg-gray-50'}`}>
+            {showCompleted ? '✓ 顯示已結束' : '已結束已隱藏'}
+          </button>
           {isAdmin && (
             <button onClick={openCreate}
               className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors">
