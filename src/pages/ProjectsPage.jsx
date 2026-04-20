@@ -2,16 +2,30 @@ import { useEffect, useState } from 'react'
 import { collection, onSnapshot, addDoc, updateDoc, deleteDoc, doc, getDoc } from 'firebase/firestore'
 import { db } from '../firebase'
 import { useAuth } from '../contexts/AuthContext'
-import { TYPE_LABELS, TYPE_COLORS, TYPE_BG, DEFAULT_RULES, getWorkStart } from '../utils/milestoneUtils'
+import { TYPE_LABELS, TYPE_COLORS, TYPE_BG, DEFAULT_RULES, getWorkStart, getLoadingLevel, LOADING_COLORS } from '../utils/milestoneUtils'
 
 const EVENT_SUBTYPES = ['尾牙', '春酒', '媒體春酒', 'HBL', '灣聲音樂會']
 const AWARD_SUBTYPES = ['25大國際品牌', '台灣精品獎', 'BC Award', '體育推手獎', 'EE Awards']
+
+const KV_CATEGORIES = ['台灣節日', '親情愛情節日', '季節促銷', '購物節', '年末節慶促銷']
+const KV_REGIONS = ['WWW', 'CN/SD2', 'SD1', 'SD2']
 
 const emptyForm = {
   name: '', type: 'tradeshow', subtype: '',
   startDate: '', endDate: '',
   location: '', showType: '', office: '', year: new Date().getFullYear(),
   assignments: [],
+  // tradeshow specific
+  boothSize: '',
+  // seasonal_kv specific
+  kvEventDate: '', kvCategory: '', kvRegion: 'WWW', kvNote: '',
+}
+
+// Auto-calc kickoff/release from event date
+function addDays(dateStr, days) {
+  const d = new Date(dateStr)
+  d.setDate(d.getDate() + days)
+  return d.toISOString().split('T')[0]
 }
 
 export default function ProjectsPage() {
@@ -55,21 +69,53 @@ export default function ProjectsPage() {
       location: p.location || '', showType: p.showType || '',
       office: p.office || '', year: p.year || new Date().getFullYear(),
       assignments: p.assignments || [],
+      boothSize: p.boothSize || '',
+      kvEventDate: p.endDate || '', kvCategory: p.kvCategory || '', kvRegion: p.kvRegion || 'WWW', kvNote: p.note || '',
     })
     setShowModal(true)
   }
 
   async function handleSave() {
-    if (!form.name || !form.startDate || !form.endDate) return
+    if (!form.name) return
+    if (form.type === 'seasonal_kv' && !form.kvEventDate) return
+    if (form.type !== 'seasonal_kv' && (!form.startDate || !form.endDate)) return
     setSaving(true)
-    const data = {
+
+    let data = {
       name: form.name, type: form.type, subtype: form.subtype,
-      startDate: form.startDate, endDate: form.endDate,
-      location: form.location, showType: form.showType,
-      office: form.office, year: parseInt(form.year),
+      location: form.location,
+      year: parseInt(form.year),
       assignments: form.assignments,
       updatedAt: new Date().toISOString(),
     }
+
+    if (form.type === 'tradeshow') {
+      data = {
+        ...data,
+        startDate: form.startDate, endDate: form.endDate,
+        showType: form.showType, office: form.office,
+        boothSize: form.boothSize ? parseInt(form.boothSize) : null,
+      }
+    } else if (form.type === 'seasonal_kv') {
+      const r = { ...DEFAULT_RULES, ...rules }
+      // startDate = kickoff (kvKickoff weeks before event)
+      // endDate = event date
+      const kickoffDate = addDays(form.kvEventDate, -(r.kvKickoff * 7))
+      data = {
+        ...data,
+        startDate: kickoffDate,
+        endDate: form.kvEventDate,
+        kvCategory: form.kvCategory,
+        kvRegion: form.kvRegion,
+        note: form.kvNote,
+      }
+    } else {
+      data = {
+        ...data,
+        startDate: form.startDate, endDate: form.endDate,
+      }
+    }
+
     try {
       if (editProject) {
         await updateDoc(doc(db, 'projects', editProject.id), data)
@@ -110,6 +156,14 @@ export default function ProjectsPage() {
   const designers = people.filter(p => p.role === 'designer')
   const planners = people.filter(p => p.role === 'planner')
 
+  // For Seasonal KV form: compute preview dates
+  const kvPreviewKickoff = form.type === 'seasonal_kv' && form.kvEventDate
+    ? addDays(form.kvEventDate, -((rules.kvKickoff || DEFAULT_RULES.kvKickoff) * 7))
+    : null
+  const kvPreviewRelease = form.type === 'seasonal_kv' && form.kvEventDate
+    ? addDays(form.kvEventDate, -((rules.kvRelease || DEFAULT_RULES.kvRelease) * 7))
+    : null
+
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
@@ -126,7 +180,7 @@ export default function ProjectsPage() {
           </select>
           {/* Type filter */}
           <div className="flex rounded-lg border border-gray-200 overflow-hidden text-sm">
-            {[['all', '全部'], ['tradeshow', '秀展'], ['event', '活動'], ['award', '報獎']].map(([val, label]) => (
+            {[['all', '全部'], ['tradeshow', '秀展'], ['event', '活動'], ['award', '報獎'], ['seasonal_kv', 'KV']].map(([val, label]) => (
               <button key={val} onClick={() => setFilterType(val)}
                 className={`px-3 py-1.5 ${filterType === val ? 'bg-blue-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}>
                 {label}
@@ -163,6 +217,8 @@ export default function ProjectsPage() {
                 const person = people.find(pe => pe.id === a.personId)
                 return person ? { ...person, role: a.role } : null
               }).filter(Boolean)
+              const loadingLevel = p.type === 'tradeshow' ? getLoadingLevel(p.boothSize, p.name) : null
+              const loadingStyle = loadingLevel ? LOADING_COLORS[loadingLevel] : null
               return (
                 <div key={p.id} className="bg-white rounded-xl border border-gray-200 p-4 hover:shadow-sm transition-shadow">
                   <div className="flex items-start justify-between gap-4">
@@ -170,7 +226,7 @@ export default function ProjectsPage() {
                       <div className="w-1 h-12 rounded-full flex-shrink-0 mt-0.5"
                         style={{ backgroundColor: TYPE_COLORS[p.type] }} />
                       <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 mb-1">
+                        <div className="flex items-center gap-2 mb-1 flex-wrap">
                           <h3 className="font-semibold text-gray-800 truncate">{p.name}</h3>
                           <span className={`text-xs px-2 py-0.5 rounded-full font-medium flex-shrink-0 ${TYPE_BG[p.type]}`}>
                             {TYPE_LABELS[p.type]}
@@ -178,14 +234,28 @@ export default function ProjectsPage() {
                           {p.subtype && (
                             <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 flex-shrink-0">{p.subtype}</span>
                           )}
+                          {loadingLevel && (
+                            <span className="text-xs px-2 py-0.5 rounded-full font-medium flex-shrink-0"
+                              style={{ backgroundColor: loadingStyle.bg, color: loadingStyle.text }}>
+                              {loadingLevel}
+                            </span>
+                          )}
+                          {p.boothSize > 0 && (
+                            <span className="text-xs text-gray-400 flex-shrink-0">{p.boothSize} 攤位</span>
+                          )}
                           {p.datePending && (
                             <span className="text-xs px-2 py-0.5 rounded-full bg-yellow-100 text-yellow-700 flex-shrink-0">日期待定</span>
+                          )}
+                          {/* KV extra info */}
+                          {p.type === 'seasonal_kv' && p.kvRegion && (
+                            <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 flex-shrink-0">{p.kvRegion}</span>
                           )}
                         </div>
                         <div className="flex items-center gap-4 text-xs text-gray-500 flex-wrap">
                           {p.startDate && <span>📅 {p.startDate} ~ {p.endDate}</span>}
                           {p.location && <span>📍 {p.location}</span>}
                           {p.showType && <span>🏷 {p.showType}</span>}
+                          {p.type === 'seasonal_kv' && p.kvCategory && <span>🏷 {p.kvCategory}</span>}
                         </div>
                         {assigned.length > 0 && (
                           <div className="flex items-center gap-2 mt-2 flex-wrap">
@@ -230,8 +300,8 @@ export default function ProjectsPage() {
               {/* Type */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">類型</label>
-                <div className="flex gap-2">
-                  {[['tradeshow', '秀展'], ['event', '活動'], ['award', '報獎']].map(([val, label]) => (
+                <div className="flex flex-wrap gap-2">
+                  {[['tradeshow', '秀展'], ['event', '活動'], ['award', '報獎'], ['seasonal_kv', 'Seasonal KV']].map(([val, label]) => (
                     <button key={val} onClick={() => setForm(f => ({ ...f, type: val, subtype: '' }))}
                       className={`px-4 py-2 rounded-lg text-sm font-medium border transition-colors ${form.type === val ? 'border-transparent text-white' : 'border-gray-200 text-gray-600 hover:bg-gray-50'}`}
                       style={form.type === val ? { backgroundColor: TYPE_COLORS[val] } : {}}>
@@ -265,37 +335,86 @@ export default function ProjectsPage() {
 
               {/* Name */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">專案名稱 *</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  {form.type === 'seasonal_kv' ? '節慶名稱 *' : '專案名稱 *'}
+                </label>
                 <input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
-                  placeholder="例：Computex 2026"
+                  placeholder={form.type === 'seasonal_kv' ? '例：農曆新年' : '例：Computex 2026'}
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
               </div>
 
-              {/* Dates */}
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">開始日期 *</label>
-                  <input type="date" value={form.startDate} onChange={e => setForm(f => ({ ...f, startDate: e.target.value }))}
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">結束日期 *</label>
-                  <input type="date" value={form.endDate} onChange={e => setForm(f => ({ ...f, endDate: e.target.value }))}
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
-                </div>
-              </div>
+              {/* Seasonal KV specific fields */}
+              {form.type === 'seasonal_kv' && (
+                <>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">節慶日期 *</label>
+                    <input type="date" value={form.kvEventDate} onChange={e => setForm(f => ({ ...f, kvEventDate: e.target.value }))}
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-pink-500" />
+                    <p className="text-xs text-gray-400 mt-1">KV 發稿與發佈日期會依里程碑設定自動計算</p>
+                  </div>
+                  {kvPreviewKickoff && (
+                    <div className="bg-pink-50 rounded-lg px-4 py-3 text-sm space-y-1">
+                      <p className="font-medium text-pink-700 mb-1">自動計算預覽</p>
+                      <p className="text-pink-600">📋 發稿（Kick off）：{kvPreviewKickoff}</p>
+                      <p className="text-pink-600">🚀 發佈KV：{kvPreviewRelease}</p>
+                      <p className="text-pink-600">🎯 節慶日期：{form.kvEventDate}</p>
+                    </div>
+                  )}
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">類別</label>
+                      <select value={form.kvCategory} onChange={e => setForm(f => ({ ...f, kvCategory: e.target.value }))}
+                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+                        <option value="">請選擇</option>
+                        {KV_CATEGORIES.map(s => <option key={s} value={s}>{s}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Region</label>
+                      <select value={form.kvRegion} onChange={e => setForm(f => ({ ...f, kvRegion: e.target.value }))}
+                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+                        {KV_REGIONS.map(s => <option key={s} value={s}>{s}</option>)}
+                      </select>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">備註</label>
+                    <input value={form.kvNote} onChange={e => setForm(f => ({ ...f, kvNote: e.target.value }))}
+                      placeholder="例：eCard"
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-pink-500" />
+                  </div>
+                </>
+              )}
 
-              {/* Location */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">地點</label>
-                <input value={form.location} onChange={e => setForm(f => ({ ...f, location: e.target.value }))}
-                  placeholder="例：Taipei, TW"
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
-              </div>
-
-              {/* Show type (tradeshow only) */}
-              {form.type === 'tradeshow' && (
+              {/* Dates (non-seasonal_kv) */}
+              {form.type !== 'seasonal_kv' && (
                 <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">開始日期 *</label>
+                    <input type="date" value={form.startDate} onChange={e => setForm(f => ({ ...f, startDate: e.target.value }))}
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">結束日期 *</label>
+                    <input type="date" value={form.endDate} onChange={e => setForm(f => ({ ...f, endDate: e.target.value }))}
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                  </div>
+                </div>
+              )}
+
+              {/* Location (non-seasonal_kv) */}
+              {form.type !== 'seasonal_kv' && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">地點</label>
+                  <input value={form.location} onChange={e => setForm(f => ({ ...f, location: e.target.value }))}
+                    placeholder="例：Taipei, TW"
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                </div>
+              )}
+
+              {/* Show type + booth size (tradeshow only) */}
+              {form.type === 'tradeshow' && (
+                <div className="grid grid-cols-3 gap-3">
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">秀展類型</label>
                     <input value={form.showType} onChange={e => setForm(f => ({ ...f, showType: e.target.value }))}
@@ -308,8 +427,26 @@ export default function ProjectsPage() {
                       placeholder="例：TW、US"
                       className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
                   </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">攤位數量</label>
+                    <input type="number" min="0" value={form.boothSize} onChange={e => setForm(f => ({ ...f, boothSize: e.target.value }))}
+                      placeholder="攤位數"
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                  </div>
                 </div>
               )}
+              {/* Loading level preview for tradeshow */}
+              {form.type === 'tradeshow' && (form.boothSize || form.name) && (() => {
+                const lvl = getLoadingLevel(form.boothSize, form.name)
+                if (!lvl) return null
+                const style = LOADING_COLORS[lvl]
+                return (
+                  <div className="rounded-lg px-4 py-2 text-sm font-medium"
+                    style={{ backgroundColor: style.bg, color: style.text }}>
+                    Loading：{lvl}（{form.name?.toUpperCase().includes('COMPUTEX') ? 'COMPUTEX 固定高度' : `${form.boothSize} 攤位`}）
+                  </div>
+                )
+              })()}
 
               {/* Year */}
               <div>
@@ -337,7 +474,7 @@ export default function ProjectsPage() {
                     </div>
                   </div>
                 )}
-                {planners.length > 0 && (
+                {planners.length > 0 && form.type !== 'seasonal_kv' && (
                   <div>
                     <p className="text-xs text-gray-500 mb-1.5 font-medium">Planner</p>
                     <div className="flex flex-wrap gap-2">
@@ -378,7 +515,8 @@ export default function ProjectsPage() {
             </div>
             <div className="px-6 py-4 border-t flex gap-3 justify-end sticky bottom-0 bg-white">
               <button onClick={() => setShowModal(false)} className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg">取消</button>
-              <button onClick={handleSave} disabled={saving || !form.name || !form.startDate || !form.endDate}
+              <button onClick={handleSave}
+                disabled={saving || !form.name || (form.type === 'seasonal_kv' ? !form.kvEventDate : (!form.startDate || !form.endDate))}
                 className="px-5 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-40 font-medium">
                 {saving ? '儲存中…' : '儲存'}
               </button>

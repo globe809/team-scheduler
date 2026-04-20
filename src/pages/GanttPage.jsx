@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef } from 'react'
 import { collection, onSnapshot, doc, getDoc } from 'firebase/firestore'
 import { db } from '../firebase'
-import { buildBarsForPerson, TYPE_COLORS, TYPE_LABELS, DEFAULT_RULES } from '../utils/milestoneUtils'
+import { buildBarsForPerson, TYPE_COLORS, TYPE_LABELS, DEFAULT_RULES, LOADING_COLORS } from '../utils/milestoneUtils'
 
 const LEAVE_COLORS = {
   '特休': '#8b5cf6',
@@ -219,9 +219,9 @@ export default function GanttPage() {
                   {/* Name column */}
                   <div className="flex-shrink-0 border-r flex items-start pt-3 px-4 gap-2 sticky left-0 z-10 bg-inherit"
                     style={{ width: LEFT_WIDTH }}>
-                    <div className={`w-2 h-2 rounded-full flex-shrink-0 mt-1 ${person.role === 'designer' ? 'bg-purple-400' : 'bg-teal-400'}`} />
+                    <div className={`w-2.5 h-2.5 rounded-full flex-shrink-0 mt-1.5 ${person.role === 'designer' ? 'bg-purple-400' : 'bg-teal-400'}`} />
                     <div className="min-w-0">
-                      <p className="text-sm font-medium text-gray-700 truncate">{person.name}</p>
+                      <p className="text-base font-semibold text-gray-800 truncate">{person.name}</p>
                       <p className="text-xs text-gray-400">{person.role === 'designer' ? '設計師' : 'Planner'}</p>
                       {bars.length > 0 && (
                         <p className="text-xs text-gray-300 mt-0.5">{bars.length} 個專案</p>
@@ -319,9 +319,18 @@ export default function GanttPage() {
                           onMouseEnter={(e) => setTooltip({ bar, x: e.clientX, y: e.clientY })}
                           onMouseLeave={() => setTooltip(null)}
                         >
-                          <span className="text-white text-xs font-medium px-2 truncate select-none leading-none">
+                          <span className="text-white text-xs font-medium px-2 truncate select-none leading-none flex-1 min-w-0">
                             {bar.projectName}
                           </span>
+                          {bar.loadingLevel && (() => {
+                            const ls = LOADING_COLORS[bar.loadingLevel]
+                            return (
+                              <span className="text-xs font-bold px-1.5 mr-1 rounded flex-shrink-0 leading-none py-0.5"
+                                style={{ backgroundColor: ls?.bg, color: ls?.text, fontSize: 9 }}>
+                                {bar.loadingLevel === '高度' ? '高' : bar.loadingLevel === '中度' ? '中' : '輕'}
+                              </span>
+                            )
+                          })()}
                           {/* Milestone diamonds */}
                           {bar.milestones.map((ms) => {
                             const msOff = dayOffset(ms.date)
@@ -351,13 +360,22 @@ export default function GanttPage() {
       {/* Tooltip */}
       {tooltip && tooltip.bar && (
         <div className="fixed z-50 bg-gray-900 text-white text-xs rounded-xl p-3 shadow-2xl pointer-events-none"
-          style={{ left: tooltip.x + 14, top: tooltip.y - 10, maxWidth: 240 }}>
+          style={{ left: tooltip.x + 14, top: tooltip.y - 10, maxWidth: 260 }}>
           <p className="font-semibold text-sm mb-1">{tooltip.bar.projectName}</p>
-          <div className="flex items-center gap-2 mb-1">
+          <div className="flex items-center gap-2 mb-1 flex-wrap">
             <div className="w-2 h-2 rounded-full" style={{ backgroundColor: tooltip.bar.color }} />
             <span className="text-gray-300">{TYPE_LABELS[tooltip.bar.type]}</span>
             <span className="text-gray-500">·</span>
             <span className="text-gray-300">{tooltip.bar.role === 'designer' ? '設計師' : 'Planner'}</span>
+            {tooltip.bar.loadingLevel && (
+              <>
+                <span className="text-gray-500">·</span>
+                <span style={{ color: LOADING_COLORS[tooltip.bar.loadingLevel]?.bg }}>
+                  {tooltip.bar.loadingLevel}
+                  {tooltip.bar.boothSize ? `（${tooltip.bar.boothSize} 攤位）` : ''}
+                </span>
+              </>
+            )}
           </div>
           <p className="text-gray-400">
             {new Date(tooltip.bar.workStart).toLocaleDateString('zh-TW')} – {new Date(tooltip.bar.workEnd).toLocaleDateString('zh-TW')}

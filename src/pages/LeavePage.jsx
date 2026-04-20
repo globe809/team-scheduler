@@ -14,7 +14,20 @@ const LEAVE_COLORS = {
 }
 
 const emptyForm = {
-  personId: '', startDate: '', endDate: '', type: '特休', note: ''
+  personId: '', startDate: '', startTime: '', endDate: '', endTime: '', type: '特休', note: ''
+}
+
+function formatTimeRange(leave) {
+  const sameDay = leave.startDate === leave.endDate
+  if (sameDay && leave.startTime && leave.endTime) {
+    return `${leave.startDate} ${leave.startTime} ~ ${leave.endTime}`
+  }
+  if (leave.startTime || leave.endTime) {
+    const start = leave.startTime ? `${leave.startDate} ${leave.startTime}` : leave.startDate
+    const end = leave.endTime ? `${leave.endDate} ${leave.endTime}` : leave.endDate
+    return `${start} ~ ${end}`
+  }
+  return `${leave.startDate} ~ ${leave.endDate}`
 }
 
 export default function LeavePage() {
@@ -45,7 +58,15 @@ export default function LeavePage() {
 
   function openEdit(leave) {
     setEditLeave(leave)
-    setForm({ personId: leave.personId, startDate: leave.startDate, endDate: leave.endDate, type: leave.type, note: leave.note || '' })
+    setForm({
+      personId: leave.personId,
+      startDate: leave.startDate,
+      startTime: leave.startTime || '',
+      endDate: leave.endDate,
+      endTime: leave.endTime || '',
+      type: leave.type,
+      note: leave.note || ''
+    })
     setShowModal(true)
   }
 
@@ -57,7 +78,9 @@ export default function LeavePage() {
       personId: form.personId,
       personName: person?.name || '',
       startDate: form.startDate,
+      startTime: form.startTime || '',
       endDate: form.endDate,
+      endTime: form.endTime || '',
       type: form.type,
       note: form.note,
       updatedAt: new Date().toISOString(),
@@ -87,7 +110,10 @@ export default function LeavePage() {
 
   const days = (leave) => {
     if (!leave.startDate || !leave.endDate) return 0
-    return Math.round((new Date(leave.endDate) - new Date(leave.startDate)) / 86400000) + 1
+    const d = Math.round((new Date(leave.endDate) - new Date(leave.startDate)) / 86400000) + 1
+    // If same day with time range, show as half-day indicator
+    if (leave.startDate === leave.endDate && leave.startTime && leave.endTime) return '半天'
+    return d
   }
 
   return (
@@ -141,6 +167,7 @@ export default function LeavePage() {
           <div className="grid gap-2">
             {filtered.map(leave => {
               const person = people.find(p => p.id === leave.personId)
+              const d = days(leave)
               return (
                 <div key={leave.id} className="bg-white rounded-xl border border-gray-200 px-5 py-3.5 flex items-center justify-between hover:shadow-sm transition-shadow">
                   <div className="flex items-center gap-4">
@@ -152,10 +179,10 @@ export default function LeavePage() {
                       <div className="flex items-center gap-2">
                         <span className="font-semibold text-gray-800">{person?.name || leave.personName}</span>
                         <span className="text-xs px-2 py-0.5 rounded-full text-white font-medium" style={{ backgroundColor: LEAVE_COLORS[leave.type] }}>{leave.type}</span>
-                        <span className="text-xs text-gray-400">{days(leave)} 天</span>
+                        <span className="text-xs text-gray-400">{d} {typeof d === 'number' ? '天' : ''}</span>
                       </div>
                       <p className="text-sm text-gray-500 mt-0.5">
-                        {leave.startDate} ~ {leave.endDate}
+                        {formatTimeRange(leave)}
                         {leave.note && <span className="text-gray-400 ml-2">· {leave.note}</span>}
                       </p>
                     </div>
@@ -202,18 +229,28 @@ export default function LeavePage() {
                   ))}
                 </div>
               </div>
-              {/* Dates */}
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">開始日期 *</label>
+              {/* Start date + time */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">開始 *</label>
+                <div className="grid grid-cols-2 gap-2">
                   <input type="date" value={form.startDate} onChange={e => setForm(f => ({ ...f, startDate: e.target.value }))}
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500" />
+                    className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500" />
+                  <input type="time" value={form.startTime} onChange={e => setForm(f => ({ ...f, startTime: e.target.value }))}
+                    placeholder="時間（選填）"
+                    className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500 text-gray-600" />
                 </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">結束日期 *</label>
+              </div>
+              {/* End date + time */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">結束 *</label>
+                <div className="grid grid-cols-2 gap-2">
                   <input type="date" value={form.endDate} onChange={e => setForm(f => ({ ...f, endDate: e.target.value }))}
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500" />
+                    className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500" />
+                  <input type="time" value={form.endTime} onChange={e => setForm(f => ({ ...f, endTime: e.target.value }))}
+                    placeholder="時間（選填）"
+                    className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500 text-gray-600" />
                 </div>
+                <p className="text-xs text-gray-400 mt-1">時間為選填，不填代表整天</p>
               </div>
               {/* Note */}
               <div>
@@ -225,7 +262,10 @@ export default function LeavePage() {
               {/* Days preview */}
               {form.startDate && form.endDate && form.endDate >= form.startDate && (
                 <div className="bg-purple-50 rounded-lg px-4 py-2 text-sm text-purple-700">
-                  共 {Math.round((new Date(form.endDate) - new Date(form.startDate)) / 86400000) + 1} 天
+                  {form.startDate === form.endDate && form.startTime && form.endTime
+                    ? `${form.startTime} ~ ${form.endTime}`
+                    : `共 ${Math.round((new Date(form.endDate) - new Date(form.startDate)) / 86400000) + 1} 天`
+                  }
                 </div>
               )}
             </div>
