@@ -6,6 +6,7 @@ const navItems = [
   { to: '/calendar', label: '日曆', icon: '📅' },
   { to: '/projects', label: '專案管理', icon: '📋' },
   { to: '/leave', label: '休假預排', icon: '🏖️' },
+  { to: '/sponsor', label: '體總贊助', icon: '🏆' },
   { to: '/people', label: '人員管理', icon: '👥' },
   { to: '/settings', label: '里程碑設定', icon: '⚙️' },
   { to: '/import', label: '匯入 Excel', icon: '📥' },

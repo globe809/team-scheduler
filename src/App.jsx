@@ -9,6 +9,7 @@ import PeoplePage from './pages/PeoplePage'
 import SettingsPage from './pages/SettingsPage'
 import ImportPage from './pages/ImportPage'
 import LeavePage from './pages/LeavePage'
+import SponsorPage from './pages/SponsorPage'
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth()
@@ -33,6 +34,7 @@ export default function App() {
         <Route path="settings" element={<SettingsPage />} />
         <Route path="import" element={<ImportPage />} />
         <Route path="leave" element={<LeavePage />} />
+        <Route path="sponsor" element={<SponsorPage />} />
       </Route>
     </Routes>
   )
