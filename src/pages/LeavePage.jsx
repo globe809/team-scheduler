@@ -14,8 +14,11 @@ const LEAVE_COLORS = {
 }
 
 const emptyForm = {
-  personId: '', startDate: '', startTime: '', endDate: '', endTime: '', type: '特休', note: ''
+  personId: '', startDate: '', startTime: '', endDate: '', endTime: '',
+  type: '特休', note: '', allDay: true,
 }
+
+const TODAY = new Date().toISOString().split('T')[0]
 
 function formatTimeRange(leave) {
   const sameDay = leave.startDate === leave.endDate
@@ -27,7 +30,13 @@ function formatTimeRange(leave) {
     const end = leave.endTime ? `${leave.endDate} ${leave.endTime}` : leave.endDate
     return `${start} ~ ${end}`
   }
+  if (leave.startDate === leave.endDate) return leave.startDate
   return `${leave.startDate} ~ ${leave.endDate}`
+}
+
+function fmtMonth(ym) {
+  const [y, m] = ym.split('-')
+  return `${y} 年 ${parseInt(m)} 月`
 }
 
 export default function LeavePage() {
@@ -40,7 +49,7 @@ export default function LeavePage() {
   const [saving, setSaving] = useState(false)
   const [deleteConfirm, setDeleteConfirm] = useState(null)
   const [filterPerson, setFilterPerson] = useState('all')
-  const [filterMonth, setFilterMonth] = useState('')
+  const [showExpired, setShowExpired] = useState(false)
 
   useEffect(() => {
     const u1 = onSnapshot(collection(db, 'people'), snap =>
@@ -50,12 +59,7 @@ export default function LeavePage() {
     return () => { u1(); u2() }
   }, [])
 
-  function openCreate() {
-    setEditLeave(null)
-    setForm(emptyForm)
-    setShowModal(true)
-  }
-
+  function openCreate() { setEditLeave(null); setForm(emptyForm); setShowModal(true) }
   function openEdit(leave) {
     setEditLeave(leave)
     setForm({
@@ -65,7 +69,8 @@ export default function LeavePage() {
       endDate: leave.endDate,
       endTime: leave.endTime || '',
       type: leave.type,
-      note: leave.note || ''
+      note: leave.note || '',
+      allDay: !leave.startTime && !leave.endTime,
     })
     setShowModal(true)
   }
@@ -78,9 +83,9 @@ export default function LeavePage() {
       personId: form.personId,
       personName: person?.name || '',
       startDate: form.startDate,
-      startTime: form.startTime || '',
+      startTime: form.allDay ? '' : (form.startTime || ''),
       endDate: form.endDate,
-      endTime: form.endTime || '',
+      endTime: form.allDay ? '' : (form.endTime || ''),
       type: form.type,
       note: form.note,
       updatedAt: new Date().toISOString(),
@@ -92,29 +97,69 @@ export default function LeavePage() {
         await addDoc(collection(db, 'leaves'), { ...data, createdAt: new Date().toISOString() })
       }
       setShowModal(false)
-    } catch (err) {
-      alert('儲存失敗：' + err.message)
-    }
+    } catch (err) { alert('儲存失敗：' + err.message) }
     setSaving(false)
   }
 
-  async function handleDelete(id) {
-    await deleteDoc(doc(db, 'leaves', id))
-    setDeleteConfirm(null)
-  }
-
-  const filtered = leaves
-    .filter(l => filterPerson === 'all' || l.personId === filterPerson)
-    .filter(l => !filterMonth || l.startDate?.startsWith(filterMonth) || l.endDate?.startsWith(filterMonth))
-    .sort((a, b) => (a.startDate || '').localeCompare(b.startDate || ''))
+  async function handleDelete(id) { await deleteDoc(doc(db, 'leaves', id)); setDeleteConfirm(null) }
 
   const days = (leave) => {
     if (!leave.startDate || !leave.endDate) return 0
-    const d = Math.round((new Date(leave.endDate) - new Date(leave.startDate)) / 86400000) + 1
-    // If same day with time range, show as half-day indicator
     if (leave.startDate === leave.endDate && leave.startTime && leave.endTime) return '半天'
-    return d
+    return Math.round((new Date(leave.endDate) - new Date(leave.startDate)) / 86400000) + 1
   }
+
+  // ── Filter ──────────────────────────────────────────────────────
+  const baseFiltered = leaves
+    .filter(l => filterPerson === 'all' || l.personId === filterPerson)
+    .filter(l => showExpired || !l.endDate || l.endDate >= TODAY)
+    .sort((a, b) => (a.startDate || '').localeCompare(b.startDate || ''))
+
+  // ── Group by month ────────────────────────────────────────────
+  const byMonth = {}
+  baseFiltered.forEach(l => {
+    const month = l.startDate?.slice(0, 7) || '未知'
+    if (!byMonth[month]) byMonth[month] = []
+    byMonth[month].push(l)
+  })
+  const monthKeys = Object.keys(byMonth).sort()
+
+  const expiredCount = leaves.filter(l =>
+    (filterPerson === 'all' || l.personId === filterPerson) && l.endDate && l.endDate < TODAY
+  ).length
+
+  // ── Leave card ────────────────────────────────────────────────
+  function LeaveCard({ leave }) {
+    const person = people.find(p => p.id === leave.personId)
+    const d = days(leave)
+    const isExpired = leave.endDate < TODAY
+    return (
+      <div className={`bg-white rounded-xl border border-gray-200 px-4 py-3 flex items-start justify-between hover:shadow-sm transition-shadow ${isExpired ? 'opacity-60' : ''}`}>
+        <div className="flex items-start gap-3 min-w-0">
+          <div className="w-1 h-full min-h-[36px] rounded-full flex-shrink-0 mt-0.5" style={{ backgroundColor: LEAVE_COLORS[leave.type] || '#d1d5db' }} />
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="font-semibold text-gray-800 text-sm">{person?.name || leave.personName}</span>
+              <span className="text-xs px-2 py-0.5 rounded-full text-white font-medium" style={{ backgroundColor: LEAVE_COLORS[leave.type] }}>{leave.type}</span>
+              <span className="text-xs text-gray-400">{d}{typeof d === 'number' ? ' 天' : ''}</span>
+              {isExpired && <span className="text-xs text-gray-300">已過期</span>}
+            </div>
+            <p className="text-xs text-gray-500 mt-0.5">
+              {formatTimeRange(leave)}
+              {leave.note && <span className="text-gray-400 ml-2">· {leave.note}</span>}
+            </p>
+          </div>
+        </div>
+        <div className="flex gap-1.5 flex-shrink-0 ml-2">
+          <button onClick={() => openEdit(leave)} className="text-xs text-blue-500 hover:text-blue-700 px-2 py-1 rounded hover:bg-blue-50">編輯</button>
+          <button onClick={() => setDeleteConfirm(leave.id)} className="text-xs text-red-400 hover:text-red-600 px-2 py-1 rounded hover:bg-red-50">刪除</button>
+        </div>
+      </div>
+    )
+  }
+
+  const designers = people.filter(p => p.role === 'designer')
+  const planners = people.filter(p => p.role !== 'designer')
 
   return (
     <div className="flex flex-col h-full">
@@ -122,20 +167,20 @@ export default function LeavePage() {
       <div className="flex items-center justify-between px-6 py-4 border-b bg-white">
         <div>
           <h2 className="text-xl font-bold text-gray-800">休假預排</h2>
-          <p className="text-sm text-gray-400">{filtered.length} 筆休假記錄</p>
+          <p className="text-sm text-gray-400">{baseFiltered.length} 筆休假記錄</p>
         </div>
-        <div className="flex items-center gap-3">
-          {/* Person filter */}
+        <div className="flex items-center gap-3 flex-wrap">
           <select value={filterPerson} onChange={e => setFilterPerson(e.target.value)}
             className="text-sm border border-gray-200 rounded-lg px-3 py-1.5 bg-white text-gray-700">
             <option value="all">全部成員</option>
             {people.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
           </select>
-          {/* Month filter */}
-          <input type="month" value={filterMonth} onChange={e => setFilterMonth(e.target.value)}
-            className="text-sm border border-gray-200 rounded-lg px-3 py-1.5 bg-white text-gray-700" />
-          {filterMonth && (
-            <button onClick={() => setFilterMonth('')} className="text-xs text-gray-400 hover:text-gray-600">✕ 清除</button>
+          {expiredCount > 0 && (
+            <label className="flex items-center gap-1.5 text-sm text-gray-500 cursor-pointer select-none">
+              <input type="checkbox" checked={showExpired} onChange={e => setShowExpired(e.target.checked)}
+                className="rounded" />
+              顯示過期（{expiredCount}）
+            </label>
           )}
           <button onClick={openCreate}
             className="flex items-center gap-2 bg-purple-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-purple-700 transition-colors">
@@ -147,7 +192,7 @@ export default function LeavePage() {
       {/* Leave list */}
       <div className="flex-1 overflow-auto p-6">
         {/* Type legend */}
-        <div className="flex items-center gap-3 mb-4 flex-wrap">
+        <div className="flex items-center gap-3 mb-5 flex-wrap">
           {LEAVE_TYPES.map(t => (
             <div key={t} className="flex items-center gap-1.5">
               <div className="w-3 h-3 rounded-sm" style={{ backgroundColor: LEAVE_COLORS[t] }} />
@@ -156,7 +201,7 @@ export default function LeavePage() {
           ))}
         </div>
 
-        {filtered.length === 0 ? (
+        {monthKeys.length === 0 ? (
           <div className="flex items-center justify-center h-64 text-gray-400">
             <div className="text-center">
               <div className="text-4xl mb-2">🏖️</div>
@@ -164,32 +209,63 @@ export default function LeavePage() {
             </div>
           </div>
         ) : (
-          <div className="grid gap-2">
-            {filtered.map(leave => {
-              const person = people.find(p => p.id === leave.personId)
-              const d = days(leave)
+          <div className="space-y-8">
+            {monthKeys.map(ym => {
+              const monthLeaves = byMonth[ym]
+              const designerLeaves = monthLeaves.filter(l => {
+                const p = people.find(pp => pp.id === l.personId)
+                return p?.role === 'designer'
+              })
+              const plannerLeaves = monthLeaves.filter(l => {
+                const p = people.find(pp => pp.id === l.personId)
+                return !p || p.role !== 'designer'
+              })
               return (
-                <div key={leave.id} className="bg-white rounded-xl border border-gray-200 px-5 py-3.5 flex items-center justify-between hover:shadow-sm transition-shadow">
-                  <div className="flex items-center gap-4">
-                    <div className="w-1 h-10 rounded-full flex-shrink-0" style={{ backgroundColor: LEAVE_COLORS[leave.type] || '#d1d5db' }} />
-                    <div className={`w-8 h-8 rounded-full flex items-center justify-center text-white text-sm font-semibold flex-shrink-0 ${person?.role === 'designer' ? 'bg-purple-500' : 'bg-teal-500'}`}>
-                      {person?.name?.charAt(0) || '?'}
-                    </div>
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <span className="font-semibold text-gray-800">{person?.name || leave.personName}</span>
-                        <span className="text-xs px-2 py-0.5 rounded-full text-white font-medium" style={{ backgroundColor: LEAVE_COLORS[leave.type] }}>{leave.type}</span>
-                        <span className="text-xs text-gray-400">{d} {typeof d === 'number' ? '天' : ''}</span>
-                      </div>
-                      <p className="text-sm text-gray-500 mt-0.5">
-                        {formatTimeRange(leave)}
-                        {leave.note && <span className="text-gray-400 ml-2">· {leave.note}</span>}
-                      </p>
-                    </div>
+                <div key={ym}>
+                  {/* Month header */}
+                  <div className="flex items-center gap-3 mb-3">
+                    <h3 className="text-base font-bold text-gray-700">{fmtMonth(ym)}</h3>
+                    <div className="flex-1 h-px bg-gray-200" />
+                    <span className="text-xs text-gray-400">{monthLeaves.length} 筆</span>
                   </div>
-                  <div className="flex gap-2">
-                    <button onClick={() => openEdit(leave)} className="text-xs text-blue-500 hover:text-blue-700 px-2 py-1 rounded hover:bg-blue-50">編輯</button>
-                    <button onClick={() => setDeleteConfirm(leave.id)} className="text-xs text-red-400 hover:text-red-600 px-2 py-1 rounded hover:bg-red-50">刪除</button>
+
+                  {/* Two columns */}
+                  <div className="grid grid-cols-2 gap-4">
+                    {/* 設計師 */}
+                    <div>
+                      <div className="flex items-center gap-2 mb-2">
+                        <div className="w-2 h-2 rounded-full bg-purple-400" />
+                        <span className="text-xs font-semibold text-purple-600 uppercase tracking-wide">設計師</span>
+                        {designerLeaves.length > 0 && (
+                          <span className="text-xs text-gray-400">{designerLeaves.length} 筆</span>
+                        )}
+                      </div>
+                      {designerLeaves.length === 0 ? (
+                        <p className="text-xs text-gray-300 pl-4">本月無休假</p>
+                      ) : (
+                        <div className="space-y-2">
+                          {designerLeaves.map(l => <LeaveCard key={l.id} leave={l} />)}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Planner */}
+                    <div>
+                      <div className="flex items-center gap-2 mb-2">
+                        <div className="w-2 h-2 rounded-full bg-teal-400" />
+                        <span className="text-xs font-semibold text-teal-600 uppercase tracking-wide">Planner</span>
+                        {plannerLeaves.length > 0 && (
+                          <span className="text-xs text-gray-400">{plannerLeaves.length} 筆</span>
+                        )}
+                      </div>
+                      {plannerLeaves.length === 0 ? (
+                        <p className="text-xs text-gray-300 pl-4">本月無休假</p>
+                      ) : (
+                        <div className="space-y-2">
+                          {plannerLeaves.map(l => <LeaveCard key={l.id} leave={l} />)}
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
               )
@@ -200,7 +276,8 @@ export default function LeavePage() {
 
       {/* Modal */}
       {showModal && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={e => e.target === e.currentTarget && setShowModal(false)}>
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4"
+          onClick={e => e.target === e.currentTarget && setShowModal(false)}>
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md">
             <div className="px-6 py-4 border-b flex items-center justify-between">
               <h3 className="text-lg font-semibold text-gray-800">{editLeave ? '編輯休假' : '新增休假'}</h3>
@@ -213,7 +290,12 @@ export default function LeavePage() {
                 <select value={form.personId} onChange={e => setForm(f => ({ ...f, personId: e.target.value }))}
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500">
                   <option value="">請選擇成員</option>
-                  {people.map(p => <option key={p.id} value={p.id}>{p.name} ({p.role === 'designer' ? '設計師' : 'Planner'})</option>)}
+                  <optgroup label="設計師">
+                    {designers.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  </optgroup>
+                  <optgroup label="Planner">
+                    {planners.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  </optgroup>
                 </select>
               </div>
               {/* Type */}
@@ -229,28 +311,42 @@ export default function LeavePage() {
                   ))}
                 </div>
               </div>
-              {/* Start date + time */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">開始 *</label>
-                <div className="grid grid-cols-2 gap-2">
+              {/* Date range */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">開始日 *</label>
                   <input type="date" value={form.startDate} onChange={e => setForm(f => ({ ...f, startDate: e.target.value }))}
-                    className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500" />
-                  <input type="time" value={form.startTime} onChange={e => setForm(f => ({ ...f, startTime: e.target.value }))}
-                    placeholder="時間（選填）"
-                    className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500 text-gray-600" />
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">結束日 *</label>
+                  <input type="date" value={form.endDate} onChange={e => setForm(f => ({ ...f, endDate: e.target.value }))}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500" />
                 </div>
               </div>
-              {/* End date + time */}
+              {/* All-day / Specify time */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">結束 *</label>
-                <div className="grid grid-cols-2 gap-2">
-                  <input type="date" value={form.endDate} onChange={e => setForm(f => ({ ...f, endDate: e.target.value }))}
-                    className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500" />
-                  <input type="time" value={form.endTime} onChange={e => setForm(f => ({ ...f, endTime: e.target.value }))}
-                    placeholder="時間（選填）"
-                    className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500 text-gray-600" />
+                <label className="block text-sm font-medium text-gray-700 mb-2">時間範圍</label>
+                <div className="flex rounded-lg border border-gray-200 overflow-hidden text-sm w-fit">
+                  <button onClick={() => setForm(f => ({ ...f, allDay: true, startTime: '', endTime: '' }))}
+                    className={`px-4 py-1.5 font-medium transition-colors ${form.allDay ? 'bg-purple-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}>
+                    整天
+                  </button>
+                  <button onClick={() => setForm(f => ({ ...f, allDay: false }))}
+                    className={`px-4 py-1.5 font-medium transition-colors ${!form.allDay ? 'bg-purple-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}>
+                    指定時間
+                  </button>
                 </div>
-                <p className="text-xs text-gray-400 mt-1">時間為選填，不填代表整天</p>
+                {!form.allDay && (
+                  <div className="grid grid-cols-2 gap-3 mt-2">
+                    <input type="time" value={form.startTime} onChange={e => setForm(f => ({ ...f, startTime: e.target.value }))}
+                      placeholder="開始時間"
+                      className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500 text-gray-600" />
+                    <input type="time" value={form.endTime} onChange={e => setForm(f => ({ ...f, endTime: e.target.value }))}
+                      placeholder="結束時間"
+                      className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500 text-gray-600" />
+                  </div>
+                )}
               </div>
               {/* Note */}
               <div>
@@ -259,12 +355,16 @@ export default function LeavePage() {
                   placeholder="例：回國、蜜月旅行"
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500" />
               </div>
-              {/* Days preview */}
+              {/* Preview */}
               {form.startDate && form.endDate && form.endDate >= form.startDate && (
                 <div className="bg-purple-50 rounded-lg px-4 py-2 text-sm text-purple-700">
-                  {form.startDate === form.endDate && form.startTime && form.endTime
-                    ? `${form.startTime} ~ ${form.endTime}`
-                    : `共 ${Math.round((new Date(form.endDate) - new Date(form.startDate)) / 86400000) + 1} 天`
+                  {form.allDay
+                    ? form.startDate === form.endDate
+                      ? `${form.startDate}（整天）`
+                      : `共 ${Math.round((new Date(form.endDate) - new Date(form.startDate)) / 86400000) + 1} 天`
+                    : form.startDate === form.endDate && form.startTime && form.endTime
+                      ? `${form.startTime} ~ ${form.endTime}`
+                      : `${form.startDate} ~ ${form.endDate}`
                   }
                 </div>
               )}

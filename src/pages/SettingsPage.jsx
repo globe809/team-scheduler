@@ -2,16 +2,28 @@ import { useEffect, useState } from 'react'
 import { doc, getDoc, setDoc } from 'firebase/firestore'
 import { db } from '../firebase'
 import { useAuth } from '../contexts/AuthContext'
-import { DEFAULT_RULES, MILESTONE_LABELS } from '../utils/milestoneUtils'
+import { DEFAULT_RULES } from '../utils/milestoneUtils'
 
-const MILESTONE_DESCRIPTIONS = {
-  designerStart: '設計師開始設計海報的時間（秀展前幾週）',
-  plannerStart: 'Planner 開始規劃內容的時間（秀展前幾週）',
-  invitationLetter: '準備邀請函的時間（秀展前幾週）',
-  pressRelease: '發布新聞稿的時間（秀展前幾週）',
-  linkedinPreview: '在 LinkedIn 發布預告的時間（秀展前幾週）',
-  linkedinPost: '在 LinkedIn 發布開展當天貼文（填 0 = 開展當天）',
+// Tradeshow milestone rows (with loading-level variants)
+const TRADESHOW_ROWS = [
+  { key: 'designerStart',   label: '設計師開始設計',  role: '設計師', desc: '秀展前幾週' },
+  { key: 'plannerStart',    label: 'Planner 開始規劃', role: 'Planner', desc: '秀展前幾週' },
+  { key: 'invitationLetter',label: '邀請函準備',       role: 'Planner', desc: '秀展前幾週' },
+  { key: 'pressRelease',    label: '新聞稿發布',       role: 'Planner', desc: '秀展前幾週' },
+  { key: 'linkedinPreview', label: 'LinkedIn 預告',   role: 'Planner', desc: '秀展前幾週' },
+]
+
+const LEVELS = ['輕度', '中度', '高度']
+const LEVEL_COLORS = {
+  '輕度': 'text-blue-700 bg-blue-50',
+  '中度': 'text-orange-700 bg-orange-50',
+  '高度': 'text-red-700 bg-red-50',
 }
+
+const KV_ROWS = [
+  { key: 'kvKickoff', label: 'KV 發稿給設計師', desc: '活動前幾週' },
+  { key: 'kvRelease', label: 'KV 發佈給業務',   desc: '活動前幾週' },
+]
 
 export default function SettingsPage() {
   const { isAdmin } = useAuth()
@@ -46,13 +58,40 @@ export default function SettingsPage() {
     }
   }
 
-  function handleReset() {
-    setRules(DEFAULT_RULES)
+  function handleReset() { setRules(DEFAULT_RULES) }
+
+  function getVal(key, level) {
+    const lk = level ? `${key}_${level}` : key
+    return rules[lk] ?? rules[key] ?? 0
+  }
+
+  function setVal(key, level, delta) {
+    const lk = level ? `${key}_${level}` : key
+    setRules(r => ({ ...r, [lk]: Math.max(0, (r[lk] ?? r[key] ?? 0) + delta) }))
   }
 
   const hasChanges = JSON.stringify(rules) !== JSON.stringify(original)
 
   if (loading) return <div className="flex items-center justify-center h-full text-gray-400">載入中…</div>
+
+  const Stepper = ({ baseKey, level }) => {
+    const val = getVal(baseKey, level)
+    return (
+      <div className="flex items-center justify-center gap-1">
+        {isAdmin ? (
+          <>
+            <button onClick={() => setVal(baseKey, level, -1)} disabled={val <= 0}
+              className="w-6 h-6 flex items-center justify-center rounded border border-gray-200 hover:bg-gray-100 text-gray-600 disabled:opacity-30 text-sm font-bold">−</button>
+            <span className="w-8 text-center text-sm font-semibold text-gray-800">{val}</span>
+            <button onClick={() => setVal(baseKey, level, +1)}
+              className="w-6 h-6 flex items-center justify-center rounded border border-gray-200 hover:bg-gray-100 text-gray-600 text-sm font-bold">+</button>
+          </>
+        ) : (
+          <span className="text-sm font-semibold text-gray-700">{val === 0 ? '當天' : `${val} 週`}</span>
+        )}
+      </div>
+    )
+  }
 
   return (
     <div className="flex flex-col h-full">
@@ -60,7 +99,7 @@ export default function SettingsPage() {
       <div className="flex items-center justify-between px-6 py-4 border-b bg-white">
         <div>
           <h2 className="text-xl font-bold text-gray-800">里程碑設定</h2>
-          <p className="text-sm text-gray-400">調整秀展各工作項目的預設提前週數</p>
+          <p className="text-sm text-gray-400">依秀展 Loading 程度設定各工作項目的提前週數</p>
         </div>
         {isAdmin && (
           <div className="flex items-center gap-2">
@@ -76,49 +115,84 @@ export default function SettingsPage() {
         )}
       </div>
 
-      <div className="flex-1 overflow-auto p-6 max-w-2xl">
+      <div className="flex-1 overflow-auto p-6 space-y-6 max-w-3xl">
+
+        {/* ── 秀展里程碑（分 loading 等級） ── */}
         <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-          <div className="px-5 py-4 bg-blue-50 border-b border-blue-100">
-            <p className="text-sm text-blue-700">
-              💡 以下設定僅適用於<strong>秀展</strong>類型。活動和報獎的日期範圍需手動填寫。
-            </p>
+          <div className="px-5 py-3 bg-blue-50 border-b border-blue-100 flex items-center gap-2">
+            <span className="text-blue-700 font-semibold text-sm">📊 秀展里程碑</span>
+            <span className="text-xs text-blue-500">依 Loading 程度設定不同提前週數</span>
+          </div>
+
+          {/* Table header */}
+          <div className="grid px-5 py-2.5 border-b bg-gray-50 text-xs font-semibold text-gray-500"
+            style={{ gridTemplateColumns: '1fr 90px 90px 90px' }}>
+            <div>工作項目</div>
+            {LEVELS.map(lv => (
+              <div key={lv} className="text-center">
+                <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${LEVEL_COLORS[lv]}`}>{lv}</span>
+              </div>
+            ))}
+          </div>
+
+          {/* Rows */}
+          <div className="divide-y divide-gray-100">
+            {TRADESHOW_ROWS.map(row => (
+              <div key={row.key} className="grid px-5 py-3 items-center"
+                style={{ gridTemplateColumns: '1fr 90px 90px 90px' }}>
+                <div>
+                  <p className="text-sm font-medium text-gray-800">{row.label}</p>
+                  <p className="text-xs text-gray-400">{row.desc} ·
+                    <span className={`ml-1 text-xs px-1.5 py-0.5 rounded-full ${row.role === '設計師' ? 'bg-purple-100 text-purple-700' : 'bg-teal-100 text-teal-700'}`}>
+                      {row.role}
+                    </span>
+                  </p>
+                </div>
+                {LEVELS.map(lv => (
+                  <div key={lv}><Stepper baseKey={row.key} level={lv} /></div>
+                ))}
+              </div>
+            ))}
+
+            {/* LinkedIn post row — always on event day */}
+            <div className="grid px-5 py-3 items-center" style={{ gridTemplateColumns: '1fr 90px 90px 90px' }}>
+              <div>
+                <p className="text-sm font-medium text-gray-800">LinkedIn 發文</p>
+                <p className="text-xs text-gray-400">開展當天 · <span className="ml-1 text-xs px-1.5 py-0.5 rounded-full bg-teal-100 text-teal-700">Planner</span></p>
+              </div>
+              {LEVELS.map(lv => (
+                <div key={lv} className="text-center">
+                  <span className="text-xs text-gray-400 italic">開展當天</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* ── Seasonal KV ── */}
+        <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+          <div className="px-5 py-3 bg-pink-50 border-b border-pink-100 flex items-center gap-2">
+            <span className="text-pink-700 font-semibold text-sm">🌸 Seasonal KV 里程碑</span>
           </div>
           <div className="divide-y divide-gray-100">
-            {Object.entries(DEFAULT_RULES).map(([key]) => (
-              <div key={key} className="flex items-center justify-between px-5 py-4">
-                <div className="flex-1 mr-6">
-                  <p className="text-sm font-medium text-gray-800">{MILESTONE_LABELS[key]}</p>
-                  <p className="text-xs text-gray-400 mt-0.5">{MILESTONE_DESCRIPTIONS[key]}</p>
+            {KV_ROWS.map(row => (
+              <div key={row.key} className="flex items-center justify-between px-5 py-3.5">
+                <div>
+                  <p className="text-sm font-medium text-gray-800">{row.label}</p>
+                  <p className="text-xs text-gray-400">{row.desc}</p>
                 </div>
-                <div className="flex items-center gap-2 flex-shrink-0">
-                  {isAdmin ? (
-                    <>
-                      <button
-                        onClick={() => setRules(r => ({ ...r, [key]: Math.max(0, r[key] - 1) }))}
-                        className="w-8 h-8 flex items-center justify-center rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-600 font-bold"
-                        disabled={rules[key] <= 0}
-                      >−</button>
-                      <span className="w-10 text-center text-sm font-semibold text-gray-800">{rules[key]}</span>
-                      <button
-                        onClick={() => setRules(r => ({ ...r, [key]: r[key] + 1 }))}
-                        className="w-8 h-8 flex items-center justify-center rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-600 font-bold"
-                      >+</button>
-                      <span className="text-sm text-gray-400 w-8">週前</span>
-                    </>
-                  ) : (
-                    <span className="text-sm font-semibold text-gray-800 w-20 text-right">
-                      {rules[key] === 0 ? '當天' : `${rules[key]} 週前`}
-                    </span>
-                  )}
+                <div className="flex items-center gap-2">
+                  <Stepper baseKey={row.key} level={null} />
+                  <span className="text-sm text-gray-400 w-8">週前</span>
                 </div>
               </div>
             ))}
           </div>
         </div>
 
-        {/* Preview */}
-        <div className="mt-6 bg-white rounded-xl border border-gray-200 p-5">
-          <h3 className="text-sm font-semibold text-gray-700 mb-4">📅 範例預覽（假設開展日：6/2）</h3>
+        {/* ── Preview ── */}
+        <div className="bg-white rounded-xl border border-gray-200 p-5">
+          <h3 className="text-sm font-semibold text-gray-700 mb-4">📅 預覽（假設開展日：6/2，中度）</h3>
           <div className="space-y-2">
             {[
               { key: 'designerStart', role: '設計師', label: '開始設計海報' },
@@ -126,30 +200,35 @@ export default function SettingsPage() {
               { key: 'invitationLetter', role: 'Planner', label: '準備邀請函' },
               { key: 'pressRelease', role: 'Planner', label: '發布新聞稿' },
               { key: 'linkedinPreview', role: 'Planner', label: 'LinkedIn 預告' },
-              { key: 'linkedinPost', role: 'Planner', label: 'LinkedIn 發文' },
             ].map(({ key, role, label }) => {
-              const showDate = new Date(2026, 5, 2) // June 2, 2026
+              const w = getVal(key, '中度')
+              const showDate = new Date(2026, 5, 2)
               const taskDate = new Date(showDate)
-              taskDate.setDate(taskDate.getDate() - rules[key] * 7)
+              taskDate.setDate(taskDate.getDate() - w * 7)
               return (
                 <div key={key} className="flex items-center justify-between text-sm">
                   <div className="flex items-center gap-2">
-                    <span className={`text-xs px-2 py-0.5 rounded-full ${role === '設計師' ? 'bg-purple-100 text-purple-700' : 'bg-teal-100 text-teal-700'}`}>
-                      {role}
-                    </span>
+                    <span className={`text-xs px-2 py-0.5 rounded-full ${role === '設計師' ? 'bg-purple-100 text-purple-700' : 'bg-teal-100 text-teal-700'}`}>{role}</span>
                     <span className="text-gray-600">{label}</span>
                   </div>
                   <span className="text-gray-800 font-medium">
-                    {rules[key] === 0 ? '6/2（開展當天）' : taskDate.toLocaleDateString('zh-TW', { month: 'numeric', day: 'numeric' })}
+                    {taskDate.toLocaleDateString('zh-TW', { month: 'numeric', day: 'numeric' })}
                   </span>
                 </div>
               )
             })}
+            <div className="flex items-center justify-between text-sm">
+              <div className="flex items-center gap-2">
+                <span className="text-xs px-2 py-0.5 rounded-full bg-teal-100 text-teal-700">Planner</span>
+                <span className="text-gray-600">LinkedIn 發文</span>
+              </div>
+              <span className="text-gray-800 font-medium">6/2（開展當天）</span>
+            </div>
           </div>
         </div>
 
         {!isAdmin && (
-          <p className="text-sm text-gray-400 mt-4 text-center">只有管理者可以修改設定</p>
+          <p className="text-sm text-gray-400 text-center">只有管理者可以修改設定</p>
         )}
       </div>
     </div>

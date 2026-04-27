@@ -58,7 +58,13 @@ function calcBusyWeeks(bars, viewStart, totalDays) {
   return counts
 }
 
-const BUSY_COLORS = ['transparent', '#bfdbfe', '#60a5fa', '#f97316', '#ef4444']
+// 10 levels: 1-5 blue gradient, 6-10 yellow→dark red; 0=none, 10+=darkest
+const BUSY_COLORS = [
+  'transparent',
+  '#eff6ff', '#dbeafe', '#bfdbfe', '#93c5fd', '#60a5fa',
+  '#fde68a', '#fb923c', '#f97316', '#ef4444', '#991b1b',
+]
+function getBusyColor(count) { return BUSY_COLORS[Math.min(count, 10)] }
 
 export default function GanttPage() {
   const [people, setPeople] = useState([])
@@ -148,9 +154,9 @@ export default function GanttPage() {
           {/* Busy legend */}
           <div className="flex items-center gap-1.5 text-xs text-gray-400">
             <span>繁忙度</span>
-            {['1件', '2件', '3件', '4件+'].map((label, i) => (
-              <div key={i} className="flex items-center gap-0.5">
-                <div className="w-3 h-2 rounded-sm" style={{ backgroundColor: BUSY_COLORS[i + 1] }} />
+            {[[1,'1'],[3,'3'],[5,'5'],[7,'7'],[10,'10+']].map(([cnt, label]) => (
+              <div key={cnt} className="flex items-center gap-0.5">
+                <div className="w-3 h-2 rounded-sm" style={{ backgroundColor: getBusyColor(cnt) }} />
                 <span>{label}</span>
               </div>
             ))}
@@ -250,7 +256,7 @@ export default function GanttPage() {
                           if (count === 0) return null
                           const left = pct(wi * 7)
                           const width = pct(7)
-                          const color = BUSY_COLORS[Math.min(count, BUSY_COLORS.length - 1)]
+                          const color = getBusyColor(count)
                           return (
                             <div key={wi} className="absolute rounded-sm"
                               style={{ left: `${left}%`, width: `${width}%`, height: BUSY_HEIGHT, backgroundColor: color }} />
