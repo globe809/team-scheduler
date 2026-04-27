@@ -1,27 +1,27 @@
 import { useEffect, useState } from 'react'
-import { collection, onSnapshot, addDoc, updateDoc, deleteDoc, doc, getDoc } from 'firebase/firestore'
+import { collection, onSnapshot, addDoc, updateDoc, deleteDoc, doc, getDoc, setDoc } from 'firebase/firestore'
 import { db } from '../firebase'
 import { useAuth } from '../contexts/AuthContext'
 import { TYPE_LABELS, TYPE_COLORS, TYPE_BG, DEFAULT_RULES, getWorkStart, getLoadingLevel, LOADING_COLORS } from '../utils/milestoneUtils'
 
 const EVENT_SUBTYPES = ['尾牙', '春酒', '媒體春酒', 'HBL', '灣聲音樂會']
 const AWARD_SUBTYPES = ['25大國際品牌', '台灣精品獎', 'BC Award', '體育推手獎', 'EE Awards']
-
 const KV_CATEGORIES = ['台灣節日', '親情愛情節日', '季節促銷', '購物節', '年末節慶促銷']
 const KV_REGIONS = ['WWW', 'CN/SD2', 'SD1', 'SD2']
+const DEFAULT_DESIGN_SUBTYPES = ['季節KV', '工規型錄', '商規型錄', '桌曆']
 
 const emptyForm = {
   name: '', type: 'tradeshow', subtype: '',
   startDate: '', endDate: '',
   location: '', showType: '', office: '', year: new Date().getFullYear(),
   assignments: [],
-  // tradeshow specific
+  // tradeshow
   boothSize: '',
-  // seasonal_kv specific
+  // design / kv
+  designSubtype: '',
   kvEventDate: '', kvCategory: '', kvRegion: 'WWW', kvNote: '',
 }
 
-// Auto-calc kickoff/release from event date
 function addDays(dateStr, days) {
   const d = new Date(dateStr)
   d.setDate(d.getDate() + days)
@@ -41,48 +41,91 @@ export default function ProjectsPage() {
   const [showCompleted, setShowCompleted] = useState(false)
   const [saving, setSaving] = useState(false)
   const [deleteConfirm, setDeleteConfirm] = useState(null)
+  // Design subtypes (default + custom from Firestore)
+  const [customDesignSubtypes, setCustomDesignSubtypes] = useState([])
+  const [newSubtypeInput, setNewSubtypeInput] = useState('')
+  const [addingSubtype, setAddingSubtype] = useState(false)
 
   useEffect(() => {
     const u1 = onSnapshot(collection(db, 'projects'), snap =>
       setProjects(snap.docs.map(d => ({ id: d.id, ...d.data() }))))
     const u2 = onSnapshot(collection(db, 'people'), snap =>
       setPeople(snap.docs.map(d => ({ id: d.id, ...d.data() }))))
-    const loadRules = async () => {
+    const loadSettings = async () => {
       const rd = await getDoc(doc(db, 'settings', 'milestoneRules'))
       if (rd.exists()) setRules({ ...DEFAULT_RULES, ...rd.data() })
+      const ds = await getDoc(doc(db, 'settings', 'designSubtypes'))
+      if (ds.exists()) setCustomDesignSubtypes(ds.data().subtypes || [])
     }
-    loadRules()
+    loadSettings()
     return () => { u1(); u2() }
   }, [])
+
+  const allDesignSubtypes = [
+    ...DEFAULT_DESIGN_SUBTYPES,
+    ...customDesignSubtypes.filter(s => !DEFAULT_DESIGN_SUBTYPES.includes(s)),
+  ]
+
+  async function saveCustomSubtype() {
+    const val = newSubtypeInput.trim()
+    if (!val || allDesignSubtypes.includes(val)) { setNewSubtypeInput(''); setAddingSubtype(false); return }
+    const updated = [...customDesignSubtypes, val]
+    await setDoc(doc(db, 'settings', 'designSubtypes'), { subtypes: updated })
+    setCustomDesignSubtypes(updated)
+    setForm(f => ({ ...f, designSubtype: val }))
+    setNewSubtypeInput(''); setAddingSubtype(false)
+  }
+
+  async function deleteCustomSubtype(sub) {
+    const updated = customDesignSubtypes.filter(s => s !== sub)
+    await setDoc(doc(db, 'settings', 'designSubtypes'), { subtypes: updated })
+    setCustomDesignSubtypes(updated)
+    if (form.designSubtype === sub) setForm(f => ({ ...f, designSubtype: '' }))
+  }
 
   function openCreate() {
     setEditProject(null)
     setForm({ ...emptyForm, year: filterYear })
+    setNewSubtypeInput(''); setAddingSubtype(false)
     setShowModal(true)
   }
 
   function openEdit(p) {
     setEditProject(p)
     setForm({
-      name: p.name || '', type: p.type || 'tradeshow', subtype: p.subtype || '',
-      startDate: p.startDate || '', endDate: p.endDate || '',
-      location: p.location || '', showType: p.showType || '',
-      office: p.office || '', year: p.year || new Date().getFullYear(),
+      name: p.name || '',
+      type: p.type || 'tradeshow',
+      subtype: p.subtype || '',
+      startDate: p.startDate || '',
+      endDate: p.endDate || '',
+      location: p.location || '',
+      showType: p.showType || '',
+      office: p.office || '',
+      year: p.year || new Date().getFullYear(),
       assignments: p.assignments || [],
       boothSize: p.boothSize || '',
-      kvEventDate: p.endDate || '', kvCategory: p.kvCategory || '', kvRegion: p.kvRegion || 'WWW', kvNote: p.note || '',
+      designSubtype: p.designSubtype || (p.type === 'seasonal_kv' ? '季節KV' : ''),
+      kvEventDate: p.endDate || '',
+      kvCategory: p.kvCategory || '',
+      kvRegion: p.kvRegion || 'WWW',
+      kvNote: p.note || '',
     })
+    setNewSubtypeInput(''); setAddingSubtype(false)
     setShowModal(true)
   }
 
   async function handleSave() {
     if (!form.name) return
-    if (form.type === 'seasonal_kv' && !form.kvEventDate) return
-    if (form.type !== 'seasonal_kv' && (!form.startDate || !form.endDate)) return
+    const isDesignKV = form.type === 'design' && form.designSubtype === '季節KV'
+    const isLegacyKV = form.type === 'seasonal_kv'
+    if ((isDesignKV || isLegacyKV) && !form.kvEventDate) return
+    if (!isDesignKV && !isLegacyKV && (!form.startDate || !form.endDate)) return
     setSaving(true)
 
     let data = {
-      name: form.name, type: form.type, subtype: form.subtype,
+      name: form.name,
+      type: form.type,
+      subtype: form.subtype,
       location: form.location,
       year: parseInt(form.year),
       assignments: form.assignments,
@@ -96,24 +139,33 @@ export default function ProjectsPage() {
         showType: form.showType, office: form.office,
         boothSize: form.boothSize ? parseInt(form.boothSize) : null,
       }
-    } else if (form.type === 'seasonal_kv') {
+    } else if (form.type === 'design') {
+      data.designSubtype = form.designSubtype
+      if (isDesignKV) {
+        // KV: auto-calculate kickoff
+        const r = { ...DEFAULT_RULES, ...rules }
+        const kickoff = addDays(form.kvEventDate, -(r.kvKickoff * 7))
+        data = {
+          ...data,
+          startDate: kickoff,
+          endDate: form.kvEventDate,
+          kvCategory: form.kvCategory,
+          kvRegion: form.kvRegion,
+          note: form.kvNote,
+        }
+      } else {
+        data = { ...data, startDate: form.startDate, endDate: form.endDate, note: form.kvNote }
+      }
+    } else if (isLegacyKV) {
       const r = { ...DEFAULT_RULES, ...rules }
-      // startDate = kickoff (kvKickoff weeks before event)
-      // endDate = event date
-      const kickoffDate = addDays(form.kvEventDate, -(r.kvKickoff * 7))
+      const kickoff = addDays(form.kvEventDate, -(r.kvKickoff * 7))
       data = {
         ...data,
-        startDate: kickoffDate,
-        endDate: form.kvEventDate,
-        kvCategory: form.kvCategory,
-        kvRegion: form.kvRegion,
-        note: form.kvNote,
+        startDate: kickoff, endDate: form.kvEventDate,
+        kvCategory: form.kvCategory, kvRegion: form.kvRegion, note: form.kvNote,
       }
     } else {
-      data = {
-        ...data,
-        startDate: form.startDate, endDate: form.endDate,
-      }
+      data = { ...data, startDate: form.startDate, endDate: form.endDate }
     }
 
     try {
@@ -144,7 +196,11 @@ export default function ProjectsPage() {
   }
 
   const filtered = projects
-    .filter(p => filterType === 'all' || p.type === filterType)
+    .filter(p => {
+      if (filterType === 'all') return true
+      if (filterType === 'design') return p.type === 'design' || p.type === 'seasonal_kv'
+      return p.type === filterType
+    })
     .filter(p => !p.year || p.year === filterYear)
     .filter(p => showCompleted || p.status !== '已結束')
     .sort((a, b) => (a.startDate || '').localeCompare(b.startDate || ''))
@@ -156,13 +212,18 @@ export default function ProjectsPage() {
   const designers = people.filter(p => p.role === 'designer')
   const planners = people.filter(p => p.role === 'planner')
 
-  // For Seasonal KV form: compute preview dates
-  const kvPreviewKickoff = form.type === 'seasonal_kv' && form.kvEventDate
+  const isDesignKV = form.type === 'design' && form.designSubtype === '季節KV'
+  const isLegacyKV = form.type === 'seasonal_kv'
+
+  const kvPreviewKickoff = (isDesignKV || isLegacyKV) && form.kvEventDate
     ? addDays(form.kvEventDate, -((rules.kvKickoff || DEFAULT_RULES.kvKickoff) * 7))
     : null
-  const kvPreviewRelease = form.type === 'seasonal_kv' && form.kvEventDate
+  const kvPreviewRelease = (isDesignKV || isLegacyKV) && form.kvEventDate
     ? addDays(form.kvEventDate, -((rules.kvRelease || DEFAULT_RULES.kvRelease) * 7))
     : null
+
+  const canSave = form.name &&
+    ((isDesignKV || isLegacyKV) ? !!form.kvEventDate : (!!form.startDate && !!form.endDate))
 
   return (
     <div className="flex flex-col h-full">
@@ -172,23 +233,20 @@ export default function ProjectsPage() {
           <h2 className="text-xl font-bold text-gray-800">專案管理</h2>
           <p className="text-sm text-gray-400">{filtered.length} 個專案</p>
         </div>
-        <div className="flex items-center gap-3">
-          {/* Year filter */}
+        <div className="flex items-center gap-3 flex-wrap">
           <select value={filterYear} onChange={e => setFilterYear(parseInt(e.target.value))}
             className="text-sm border border-gray-300 rounded-lg px-3 py-1.5 bg-white text-gray-700">
             {years.map(y => <option key={y} value={y}>{y}</option>)}
           </select>
-          {/* Type filter */}
           <div className="flex rounded-lg border border-gray-200 overflow-hidden text-sm">
-            {[['all', '全部'], ['tradeshow', '秀展'], ['event', '活動'], ['award', '報獎'], ['seasonal_kv', 'KV']].map(([val, label]) => (
+            {[['all','全部'],['tradeshow','秀展'],['event','活動'],['award','報獎'],['design','設計類']].map(([val,label]) => (
               <button key={val} onClick={() => setFilterType(val)}
                 className={`px-3 py-1.5 ${filterType === val ? 'bg-blue-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}>
                 {label}
               </button>
             ))}
           </div>
-          <button
-            onClick={() => setShowCompleted(v => !v)}
+          <button onClick={() => setShowCompleted(v => !v)}
             className={`px-3 py-2 text-sm rounded-lg border transition-colors ${showCompleted ? 'bg-gray-200 text-gray-700 border-gray-300' : 'bg-white text-gray-500 border-gray-200 hover:bg-gray-50'}`}>
             {showCompleted ? '✓ 顯示已結束' : '已結束已隱藏'}
           </button>
@@ -205,10 +263,7 @@ export default function ProjectsPage() {
       <div className="flex-1 overflow-auto p-6">
         {filtered.length === 0 ? (
           <div className="flex items-center justify-center h-64 text-gray-400">
-            <div className="text-center">
-              <div className="text-4xl mb-2">📋</div>
-              <p>尚無專案，點擊「新增專案」開始</p>
-            </div>
+            <div className="text-center"><div className="text-4xl mb-2">📋</div><p>尚無專案，點擊「新增專案」開始</p></div>
           </div>
         ) : (
           <div className="grid gap-3">
@@ -219,20 +274,22 @@ export default function ProjectsPage() {
               }).filter(Boolean)
               const loadingLevel = p.type === 'tradeshow' ? getLoadingLevel(p.boothSize, p.name) : null
               const loadingStyle = loadingLevel ? LOADING_COLORS[loadingLevel] : null
+              const typeColor = TYPE_COLORS[p.type] || '#6B7280'
+              const typeBg = TYPE_BG[p.type] || 'bg-gray-100 text-gray-600'
+              const typeLabel = TYPE_LABELS[p.type] || p.type
+              // For design type: show designSubtype as subtype label
+              const subtypeLabel = p.type === 'design' ? p.designSubtype : p.subtype
               return (
                 <div key={p.id} className="bg-white rounded-xl border border-gray-200 p-4 hover:shadow-sm transition-shadow">
                   <div className="flex items-start justify-between gap-4">
                     <div className="flex items-start gap-3 flex-1 min-w-0">
-                      <div className="w-1 h-12 rounded-full flex-shrink-0 mt-0.5"
-                        style={{ backgroundColor: TYPE_COLORS[p.type] }} />
+                      <div className="w-1 h-12 rounded-full flex-shrink-0 mt-0.5" style={{ backgroundColor: typeColor }} />
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 mb-1 flex-wrap">
                           <h3 className="font-semibold text-gray-800 truncate">{p.name}</h3>
-                          <span className={`text-xs px-2 py-0.5 rounded-full font-medium flex-shrink-0 ${TYPE_BG[p.type]}`}>
-                            {TYPE_LABELS[p.type]}
-                          </span>
-                          {p.subtype && (
-                            <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 flex-shrink-0">{p.subtype}</span>
+                          <span className={`text-xs px-2 py-0.5 rounded-full font-medium flex-shrink-0 ${typeBg}`}>{typeLabel}</span>
+                          {subtypeLabel && (
+                            <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 flex-shrink-0">{subtypeLabel}</span>
                           )}
                           {loadingLevel && (
                             <span className="text-xs px-2 py-0.5 rounded-full font-medium flex-shrink-0"
@@ -243,11 +300,7 @@ export default function ProjectsPage() {
                           {p.boothSize > 0 && (
                             <span className="text-xs text-gray-400 flex-shrink-0">{p.boothSize} 攤位</span>
                           )}
-                          {p.datePending && (
-                            <span className="text-xs px-2 py-0.5 rounded-full bg-yellow-100 text-yellow-700 flex-shrink-0">日期待定</span>
-                          )}
-                          {/* KV extra info */}
-                          {p.type === 'seasonal_kv' && p.kvRegion && (
+                          {(p.type === 'seasonal_kv' || (p.type === 'design' && p.designSubtype === '季節KV')) && p.kvRegion && (
                             <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 flex-shrink-0">{p.kvRegion}</span>
                           )}
                         </div>
@@ -255,7 +308,8 @@ export default function ProjectsPage() {
                           {p.startDate && <span>📅 {p.startDate} ~ {p.endDate}</span>}
                           {p.location && <span>📍 {p.location}</span>}
                           {p.showType && <span>🏷 {p.showType}</span>}
-                          {p.type === 'seasonal_kv' && p.kvCategory && <span>🏷 {p.kvCategory}</span>}
+                          {p.kvCategory && <span>🏷 {p.kvCategory}</span>}
+                          {p.note && <span>· {p.note}</span>}
                         </div>
                         {assigned.length > 0 && (
                           <div className="flex items-center gap-2 mt-2 flex-wrap">
@@ -270,14 +324,8 @@ export default function ProjectsPage() {
                     </div>
                     {isAdmin && (
                       <div className="flex gap-2 flex-shrink-0">
-                        <button onClick={() => openEdit(p)}
-                          className="text-xs text-blue-600 hover:text-blue-800 px-2 py-1 rounded hover:bg-blue-50">
-                          編輯
-                        </button>
-                        <button onClick={() => setDeleteConfirm(p.id)}
-                          className="text-xs text-red-500 hover:text-red-700 px-2 py-1 rounded hover:bg-red-50">
-                          刪除
-                        </button>
+                        <button onClick={() => openEdit(p)} className="text-xs text-blue-600 hover:text-blue-800 px-2 py-1 rounded hover:bg-blue-50">編輯</button>
+                        <button onClick={() => setDeleteConfirm(p.id)} className="text-xs text-red-500 hover:text-red-700 px-2 py-1 rounded hover:bg-red-50">刪除</button>
                       </div>
                     )}
                   </div>
@@ -290,28 +338,72 @@ export default function ProjectsPage() {
 
       {/* Modal */}
       {showModal && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={e => e.target === e.currentTarget && setShowModal(false)}>
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4"
+          onClick={e => e.target === e.currentTarget && setShowModal(false)}>
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
-            <div className="px-6 py-4 border-b flex items-center justify-between sticky top-0 bg-white">
+            <div className="px-6 py-4 border-b flex items-center justify-between sticky top-0 bg-white z-10">
               <h3 className="text-lg font-semibold text-gray-800">{editProject ? '編輯專案' : '新增專案'}</h3>
               <button onClick={() => setShowModal(false)} className="text-gray-400 hover:text-gray-600 text-xl">×</button>
             </div>
             <div className="px-6 py-5 space-y-4">
-              {/* Type */}
+
+              {/* ── Type ── */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">類型</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">專案類型</label>
                 <div className="flex flex-wrap gap-2">
-                  {[['tradeshow', '秀展'], ['event', '活動'], ['award', '報獎'], ['seasonal_kv', 'Seasonal KV']].map(([val, label]) => (
-                    <button key={val} onClick={() => setForm(f => ({ ...f, type: val, subtype: '' }))}
-                      className={`px-4 py-2 rounded-lg text-sm font-medium border transition-colors ${form.type === val ? 'border-transparent text-white' : 'border-gray-200 text-gray-600 hover:bg-gray-50'}`}
-                      style={form.type === val ? { backgroundColor: TYPE_COLORS[val] } : {}}>
+                  {[['tradeshow','秀展'],['event','活動'],['award','報獎'],['design','設計類']].map(([val, label]) => (
+                    <button key={val} onClick={() => setForm(f => ({ ...f, type: val, subtype: '', designSubtype: '' }))}
+                      className={`px-4 py-2 rounded-lg text-sm font-medium border transition-colors ${form.type === val || (val === 'design' && form.type === 'seasonal_kv') ? 'border-transparent text-white' : 'border-gray-200 text-gray-600 hover:bg-gray-50'}`}
+                      style={form.type === val || (val === 'design' && form.type === 'seasonal_kv') ? { backgroundColor: TYPE_COLORS[val] } : {}}>
                       {label}
                     </button>
                   ))}
                 </div>
               </div>
 
-              {/* Subtype for event/award */}
+              {/* ── Design subtype selector ── */}
+              {(form.type === 'design' || form.type === 'seasonal_kv') && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">設計類別</label>
+                  <div className="flex flex-wrap gap-2">
+                    {allDesignSubtypes.map(sub => (
+                      <div key={sub} className="relative group">
+                        <button onClick={() => setForm(f => ({ ...f, designSubtype: sub }))}
+                          className={`px-3 py-1.5 text-sm rounded-lg border-2 font-medium transition-colors ${form.designSubtype === sub ? 'border-indigo-500 bg-indigo-600 text-white' : 'border-gray-200 text-gray-600 hover:bg-gray-50'}`}>
+                          {sub}
+                        </button>
+                        {/* Delete custom subtype (non-default) */}
+                        {!DEFAULT_DESIGN_SUBTYPES.includes(sub) && isAdmin && (
+                          <button onClick={() => deleteCustomSubtype(sub)}
+                            className="absolute -top-1.5 -right-1.5 w-4 h-4 bg-red-500 text-white rounded-full text-xs leading-none opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                            ×
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                    {/* Add new subtype */}
+                    {isAdmin && !addingSubtype && (
+                      <button onClick={() => setAddingSubtype(true)}
+                        className="px-3 py-1.5 text-sm rounded-lg border-2 border-dashed border-gray-300 text-gray-400 hover:border-indigo-400 hover:text-indigo-500 transition-colors">
+                        + 新增類別
+                      </button>
+                    )}
+                    {isAdmin && addingSubtype && (
+                      <div className="flex items-center gap-1.5">
+                        <input autoFocus value={newSubtypeInput}
+                          onChange={e => setNewSubtypeInput(e.target.value)}
+                          onKeyDown={e => { if (e.key === 'Enter') saveCustomSubtype(); if (e.key === 'Escape') { setAddingSubtype(false); setNewSubtypeInput('') } }}
+                          placeholder="類別名稱"
+                          className="border border-indigo-400 rounded-lg px-2.5 py-1.5 text-sm w-28 focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+                        <button onClick={saveCustomSubtype} className="text-xs bg-indigo-600 text-white px-2.5 py-1.5 rounded-lg hover:bg-indigo-700">確認</button>
+                        <button onClick={() => { setAddingSubtype(false); setNewSubtypeInput('') }} className="text-xs text-gray-400 hover:text-gray-600 px-1.5 py-1.5">✕</button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* ── Event subtype ── */}
               {form.type === 'event' && (
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">活動類型</label>
@@ -333,31 +425,30 @@ export default function ProjectsPage() {
                 </div>
               )}
 
-              {/* Name */}
+              {/* ── Name ── */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  {form.type === 'seasonal_kv' ? '節慶名稱 *' : '專案名稱 *'}
-                </label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">專案名稱 *</label>
                 <input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
-                  placeholder={form.type === 'seasonal_kv' ? '例：農曆新年' : '例：Computex 2026'}
+                  placeholder={isDesignKV ? '例：農曆新年 2026' : form.type === 'design' ? '例：2026 型錄' : '例：Computex 2026'}
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
               </div>
 
-              {/* Seasonal KV specific fields */}
-              {form.type === 'seasonal_kv' && (
+              {/* ── KV-specific fields (design+季節KV or legacy seasonal_kv) ── */}
+              {(isDesignKV || isLegacyKV) && (
                 <>
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">節慶日期 *</label>
-                    <input type="date" value={form.kvEventDate} onChange={e => setForm(f => ({ ...f, kvEventDate: e.target.value }))}
-                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-pink-500" />
-                    <p className="text-xs text-gray-400 mt-1">KV 發稿與發佈日期會依里程碑設定自動計算</p>
+                    <input type="date" value={form.kvEventDate}
+                      onChange={e => setForm(f => ({ ...f, kvEventDate: e.target.value }))}
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+                    <p className="text-xs text-gray-400 mt-1">KV 發稿與發佈日期依里程碑設定自動計算</p>
                   </div>
                   {kvPreviewKickoff && (
-                    <div className="bg-pink-50 rounded-lg px-4 py-3 text-sm space-y-1">
-                      <p className="font-medium text-pink-700 mb-1">自動計算預覽</p>
-                      <p className="text-pink-600">📋 發稿（Kick off）：{kvPreviewKickoff}</p>
-                      <p className="text-pink-600">🚀 發佈KV：{kvPreviewRelease}</p>
-                      <p className="text-pink-600">🎯 節慶日期：{form.kvEventDate}</p>
+                    <div className="bg-indigo-50 border border-indigo-100 rounded-lg px-4 py-3 text-sm space-y-1">
+                      <p className="font-medium text-indigo-700 mb-1">自動計算預覽</p>
+                      <p className="text-indigo-600">📋 發稿（Kick off）：{kvPreviewKickoff}</p>
+                      <p className="text-indigo-600">🚀 發佈KV：{kvPreviewRelease}</p>
+                      <p className="text-indigo-600">🎯 節慶日期：{form.kvEventDate}</p>
                     </div>
                   )}
                   <div className="grid grid-cols-2 gap-3">
@@ -380,82 +471,106 @@ export default function ProjectsPage() {
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">備註</label>
                     <input value={form.kvNote} onChange={e => setForm(f => ({ ...f, kvNote: e.target.value }))}
-                      placeholder="例：eCard"
-                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-pink-500" />
+                      placeholder="例：eCard、全球版本"
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
                   </div>
                 </>
               )}
 
-              {/* Dates (non-seasonal_kv) */}
-              {form.type !== 'seasonal_kv' && (
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">開始日期 *</label>
-                    <input type="date" value={form.startDate} onChange={e => setForm(f => ({ ...f, startDate: e.target.value }))}
-                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              {/* ── Non-KV design fields ── */}
+              {form.type === 'design' && !isDesignKV && (
+                <>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">開始日期 *</label>
+                      <input type="date" value={form.startDate} onChange={e => setForm(f => ({ ...f, startDate: e.target.value }))}
+                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">結束日期 *</label>
+                      <input type="date" value={form.endDate} onChange={e => setForm(f => ({ ...f, endDate: e.target.value }))}
+                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+                    </div>
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">結束日期 *</label>
-                    <input type="date" value={form.endDate} onChange={e => setForm(f => ({ ...f, endDate: e.target.value }))}
+                    <label className="block text-sm font-medium text-gray-700 mb-1">備註（選填）</label>
+                    <input value={form.kvNote} onChange={e => setForm(f => ({ ...f, kvNote: e.target.value }))}
+                      placeholder="例：版本說明"
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+                  </div>
+                </>
+              )}
+
+              {/* ── Tradeshow / Event / Award date + location ── */}
+              {(form.type === 'tradeshow' || form.type === 'event' || form.type === 'award') && (
+                <>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">開始日期 *</label>
+                      <input type="date" value={form.startDate} onChange={e => setForm(f => ({ ...f, startDate: e.target.value }))}
+                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">結束日期 *</label>
+                      <input type="date" value={form.endDate} onChange={e => setForm(f => ({ ...f, endDate: e.target.value }))}
+                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">地點</label>
+                    <input value={form.location} onChange={e => setForm(f => ({ ...f, location: e.target.value }))}
+                      placeholder="例：Taipei, TW"
                       className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
                   </div>
-                </div>
+                </>
               )}
 
-              {/* Location (non-seasonal_kv) */}
-              {form.type !== 'seasonal_kv' && (
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">地點</label>
-                  <input value={form.location} onChange={e => setForm(f => ({ ...f, location: e.target.value }))}
-                    placeholder="例：Taipei, TW"
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
-                </div>
-              )}
-
-              {/* Show type + booth size (tradeshow only) */}
+              {/* ── Tradeshow specific ── */}
               {form.type === 'tradeshow' && (
-                <div className="grid grid-cols-3 gap-3">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">秀展類型</label>
-                    <input value={form.showType} onChange={e => setForm(f => ({ ...f, showType: e.target.value }))}
-                      placeholder="例：Automation"
-                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                <>
+                  <div className="grid grid-cols-3 gap-3">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">秀展類型</label>
+                      <input value={form.showType} onChange={e => setForm(f => ({ ...f, showType: e.target.value }))}
+                        placeholder="例：Automation"
+                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">負責 Office</label>
+                      <input value={form.office} onChange={e => setForm(f => ({ ...f, office: e.target.value }))}
+                        placeholder="例：TW、US"
+                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">攤位數量</label>
+                      <input type="number" min="0" value={form.boothSize}
+                        onChange={e => setForm(f => ({ ...f, boothSize: e.target.value }))}
+                        placeholder="攤位數"
+                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                    </div>
                   </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">負責 Office</label>
-                    <input value={form.office} onChange={e => setForm(f => ({ ...f, office: e.target.value }))}
-                      placeholder="例：TW、US"
-                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">攤位數量</label>
-                    <input type="number" min="0" value={form.boothSize} onChange={e => setForm(f => ({ ...f, boothSize: e.target.value }))}
-                      placeholder="攤位數"
-                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
-                  </div>
-                </div>
+                  {(form.boothSize || form.name) && (() => {
+                    const lvl = getLoadingLevel(form.boothSize, form.name)
+                    if (!lvl) return null
+                    const style = LOADING_COLORS[lvl]
+                    return (
+                      <div className="rounded-lg px-4 py-2 text-sm font-medium"
+                        style={{ backgroundColor: style.bg, color: style.text }}>
+                        Loading：{lvl}（{form.name?.toUpperCase().includes('COMPUTEX') ? 'COMPUTEX 固定高度' : `${form.boothSize} 攤位`}）
+                      </div>
+                    )
+                  })()}
+                </>
               )}
-              {/* Loading level preview for tradeshow */}
-              {form.type === 'tradeshow' && (form.boothSize || form.name) && (() => {
-                const lvl = getLoadingLevel(form.boothSize, form.name)
-                if (!lvl) return null
-                const style = LOADING_COLORS[lvl]
-                return (
-                  <div className="rounded-lg px-4 py-2 text-sm font-medium"
-                    style={{ backgroundColor: style.bg, color: style.text }}>
-                    Loading：{lvl}（{form.name?.toUpperCase().includes('COMPUTEX') ? 'COMPUTEX 固定高度' : `${form.boothSize} 攤位`}）
-                  </div>
-                )
-              })()}
 
-              {/* Year */}
+              {/* ── Year ── */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">年份</label>
                 <input type="number" value={form.year} onChange={e => setForm(f => ({ ...f, year: e.target.value }))}
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
               </div>
 
-              {/* Assign people */}
+              {/* ── Assign people ── */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">指派人員</label>
                 {designers.length > 0 && (
@@ -474,7 +589,7 @@ export default function ProjectsPage() {
                     </div>
                   </div>
                 )}
-                {planners.length > 0 && form.type !== 'seasonal_kv' && (
+                {planners.length > 0 && !isDesignKV && !isLegacyKV && (
                   <div>
                     <p className="text-xs text-gray-500 mb-1.5 font-medium">Planner</p>
                     <div className="flex flex-wrap gap-2">
@@ -490,12 +605,10 @@ export default function ProjectsPage() {
                     </div>
                   </div>
                 )}
-                {people.length === 0 && (
-                  <p className="text-sm text-gray-400">請先在「人員管理」新增成員</p>
-                )}
+                {people.length === 0 && <p className="text-sm text-gray-400">請先在「人員管理」新增成員</p>}
               </div>
 
-              {/* Work period preview */}
+              {/* ── Tradeshow work period preview ── */}
               {form.type === 'tradeshow' && form.startDate && form.assignments.length > 0 && (
                 <div className="bg-blue-50 rounded-lg p-3">
                   <p className="text-xs font-medium text-blue-700 mb-2">自動計算工作區間預覽</p>
@@ -515,8 +628,7 @@ export default function ProjectsPage() {
             </div>
             <div className="px-6 py-4 border-t flex gap-3 justify-end sticky bottom-0 bg-white">
               <button onClick={() => setShowModal(false)} className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg">取消</button>
-              <button onClick={handleSave}
-                disabled={saving || !form.name || (form.type === 'seasonal_kv' ? !form.kvEventDate : (!form.startDate || !form.endDate))}
+              <button onClick={handleSave} disabled={saving || !canSave}
                 className="px-5 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-40 font-medium">
                 {saving ? '儲存中…' : '儲存'}
               </button>
