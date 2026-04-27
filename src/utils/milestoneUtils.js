@@ -35,7 +35,8 @@ export const TYPE_COLORS = {
   tradeshow: '#3B82F6',
   event: '#F97316',
   award: '#10B981',
-  seasonal_kv: '#EC4899',
+  seasonal_kv: '#EC4899',   // legacy – kept for backward compat
+  design: '#6366F1',        // new: 設計類（含季節KV、型錄、桌曆…）
 }
 
 export const TYPE_LABELS = {
@@ -43,6 +44,7 @@ export const TYPE_LABELS = {
   event: '活動',
   award: '報獎',
   seasonal_kv: 'Seasonal KV',
+  design: '設計類',
 }
 
 export const TYPE_BG = {
@@ -50,6 +52,7 @@ export const TYPE_BG = {
   event: 'bg-orange-100 text-orange-700',
   award: 'bg-emerald-100 text-emerald-700',
   seasonal_kv: 'bg-pink-100 text-pink-700',
+  design: 'bg-indigo-100 text-indigo-700',
 }
 
 // Loading level based on booth count and project name
@@ -140,9 +143,16 @@ export function buildBarsForPerson(personId, projects, rules) {
         workEnd = new Date(project.endDate)
         milestones = assignment.role === 'planner' ? getMilestones(project.startDate, rules, level) : []
       } else if (project.type === 'seasonal_kv') {
+        // Legacy type – backward compat
         workStart = new Date(project.startDate)
         workEnd = new Date(project.endDate)
         milestones = project.endDate ? getKVMilestones(project.endDate, rules) : []
+      } else if (project.type === 'design') {
+        workStart = new Date(project.startDate)
+        workEnd = new Date(project.endDate)
+        // Only '季節KV' subtype gets KV milestone
+        milestones = (project.designSubtype === '季節KV' && project.endDate)
+          ? getKVMilestones(project.endDate, rules) : []
       } else {
         workStart = new Date(project.startDate)
         workEnd = new Date(project.endDate)
