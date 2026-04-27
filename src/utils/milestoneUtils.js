@@ -1,13 +1,23 @@
 // Default milestone rules (weeks before show start)
 export const DEFAULT_RULES = {
-  designerStart: 8,     // 設計師開始設計海報
-  plannerStart: 8,      // Planner 開始規劃內容
-  invitationLetter: 4,  // 邀請函準備
-  pressRelease: 2,      // 新聞稿發布
-  linkedinPreview: 1,   // LinkedIn 預告
-  linkedinPost: 0,      // LinkedIn 當天發文（開展日）
-  kvKickoff: 6,         // Seasonal KV: 發稿給設計師（活動前幾週）
-  kvRelease: 4,         // Seasonal KV: 發佈KV給業務（活動前幾週）
+  // ── Tradeshow: flat fallback (used when no loading level) ───────
+  designerStart: 8,
+  plannerStart: 8,
+  invitationLetter: 4,
+  pressRelease: 2,
+  linkedinPreview: 1,
+  linkedinPost: 0,
+
+  // ── Tradeshow: per loading level ────────────────────────────────
+  designerStart_輕度: 6,   designerStart_中度: 8,   designerStart_高度: 10,
+  plannerStart_輕度: 6,    plannerStart_中度: 8,    plannerStart_高度: 10,
+  invitationLetter_輕度: 3, invitationLetter_中度: 4, invitationLetter_高度: 5,
+  pressRelease_輕度: 1,    pressRelease_中度: 2,    pressRelease_高度: 3,
+  linkedinPreview_輕度: 1, linkedinPreview_中度: 1, linkedinPreview_高度: 2,
+
+  // ── Seasonal KV ─────────────────────────────────────────────────
+  kvKickoff: 6,   // 發稿給設計師（活動前幾週）
+  kvRelease: 4,   // 發佈KV給業務（活動前幾週）
 }
 
 export const MILESTONE_LABELS = {
@@ -17,6 +27,8 @@ export const MILESTONE_LABELS = {
   pressRelease: '新聞稿',
   linkedinPreview: 'LinkedIn 預告',
   linkedinPost: 'LinkedIn 發文',
+  kvKickoff: 'KV 發稿',
+  kvRelease: 'KV 發佈',
 }
 
 export const TYPE_COLORS = {
@@ -66,25 +78,38 @@ function subWeeks(date, weeks) {
 }
 
 /**
- * Calculate work start date for a person based on their role and milestone rules
+ * Resolve a rule value: use per-loading-level key if available, else fall back to base key
  */
-export function getWorkStart(projectStartDate, role, rules) {
+function resolveRule(r, baseKey, loadingLevel) {
+  if (loadingLevel) {
+    const lk = `${baseKey}_${loadingLevel}`
+    if (r[lk] != null) return r[lk]
+  }
+  return r[baseKey]
+}
+
+/**
+ * Calculate work start date for a person based on their role, milestone rules, and loading level
+ */
+export function getWorkStart(projectStartDate, role, rules, loadingLevel) {
   const r = { ...DEFAULT_RULES, ...rules }
   const start = new Date(projectStartDate)
-  if (role === 'designer') return subWeeks(start, r.designerStart)
-  return subWeeks(start, r.plannerStart)
+  const baseKey = role === 'designer' ? 'designerStart' : 'plannerStart'
+  const weeks = resolveRule(r, baseKey, loadingLevel)
+  return subWeeks(start, weeks)
 }
 
 /**
  * Get all milestone dates for a trade show project (planner only)
  */
-export function getMilestones(projectStartDate, rules) {
+export function getMilestones(projectStartDate, rules, loadingLevel) {
   const r = { ...DEFAULT_RULES, ...rules }
   const start = new Date(projectStartDate)
+  const rv = (key) => resolveRule(r, key, loadingLevel)
   return [
-    { key: 'invitationLetter', date: subWeeks(start, r.invitationLetter), label: '邀請函' },
-    { key: 'pressRelease', date: subWeeks(start, r.pressRelease), label: '新聞稿' },
-    { key: 'linkedinPreview', date: subWeeks(start, r.linkedinPreview), label: 'LinkedIn 預告' },
+    { key: 'invitationLetter', date: subWeeks(start, rv('invitationLetter')), label: '邀請函' },
+    { key: 'pressRelease', date: subWeeks(start, rv('pressRelease')), label: '新聞稿' },
+    { key: 'linkedinPreview', date: subWeeks(start, rv('linkedinPreview')), label: 'LinkedIn 預告' },
     { key: 'linkedinPost', date: start, label: 'LinkedIn 發文' },
   ]
 }
@@ -105,17 +130,16 @@ export function getKVMilestones(eventDate, rules) {
 export function buildBarsForPerson(personId, projects, rules) {
   const bars = []
   for (const project of projects) {
-    // Find assignments for this person
     const assignments = (project.assignments || []).filter(a => a.personId === personId)
     for (const assignment of assignments) {
       let workStart, workEnd, milestones
 
       if (project.type === 'tradeshow') {
-        workStart = getWorkStart(project.startDate, assignment.role, rules)
+        const level = getLoadingLevel(project.boothSize, project.name)
+        workStart = getWorkStart(project.startDate, assignment.role, rules, level)
         workEnd = new Date(project.endDate)
-        milestones = assignment.role === 'planner' ? getMilestones(project.startDate, rules) : []
+        milestones = assignment.role === 'planner' ? getMilestones(project.startDate, rules, level) : []
       } else if (project.type === 'seasonal_kv') {
-        // For seasonal_kv: startDate = kickoff, endDate = event date, releaseDate = milestone
         workStart = new Date(project.startDate)
         workEnd = new Date(project.endDate)
         milestones = project.endDate ? getKVMilestones(project.endDate, rules) : []
