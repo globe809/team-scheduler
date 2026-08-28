@@ -22,7 +22,7 @@ const SORTS = [
 const DESIGNER_ORDER = ['Sherry', 'Tingwei', 'Yuna', 'Abby']
 
 export default function RequestsTablePage() {
-  const { role, email, regions } = useAuth()
+  const { role, email, regions, canReview } = useAuth()
   const { newIds, markSeen } = useNotifications()
   const [searchParams, setSearchParams] = useSearchParams()
   const [rows, setRows] = useState([])
@@ -37,7 +37,9 @@ export default function RequestsTablePage() {
 
   useEffect(() => {
     let q
-    if (role === 'manager') {
+    if (role === 'manager' || canReview) {
+      // canReview: manager 或臨時審核代理人——代理期間要看得到所有設計師目前進行中的需求，
+      // 不只是自己被指派的那些(firestore.rules 的 isDelegatedReviewer() 已開放 requests 全表讀取)
       q = collection(db, 'requests')
     } else if (role === 'designer') {
       q = query(collection(db, 'requests'), where('assignedDesigners', 'array-contains', email))
@@ -47,9 +49,9 @@ export default function RequestsTablePage() {
     } else { return }
     const unsub = onSnapshot(q, snap => setRows(snap.docs.map(d => ({ id: d.id, ...d.data() }))))
     return () => { unsub(); setRows([]) }
-  }, [role, email, regions])
+  }, [role, email, regions, canReview])
 
-  const noRegion = role === 'planner' && (!regions || regions.length === 0)
+  const noRegion = role === 'planner' && !canReview && (!regions || regions.length === 0)
 
   async function setStatus(r, next) {
     setBusy(r.id)
@@ -233,8 +235,9 @@ export default function RequestsTablePage() {
       <h1 className="text-2xl font-bold text-gray-800 mb-1">需求總表</h1>
       <p className="text-sm text-gray-500 mb-5">
         {role === 'manager' && '全部需求一覽,點擊任一列查看完整內容'}
-        {role === 'designer' && '指派給你的需求,可調整進度'}
-        {role === 'planner' && `你負責區域(${(regions || []).join('、') || '未設定'})的需求,可勾選結案`}
+        {role !== 'manager' && canReview && '你目前是臨時審核代理人,這裡顯示全部設計師的需求'}
+        {role === 'designer' && !canReview && '指派給你的需求,可調整進度'}
+        {role === 'planner' && !canReview && `你負責區域(${(regions || []).join('、') || '未設定'})的需求,可勾選結案`}
       </p>
 
       {/* 篩選 + 排序 */}
