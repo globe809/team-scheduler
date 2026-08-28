@@ -20,8 +20,9 @@ const persistSeen = (email, set) => {
 const ACTIVE = ['pending', 'assigned', 'in_progress', 'reviewing']
 
 export function NotificationsProvider({ children }) {
-  const { role, email, regions, unauthorized } = useAuth()
+  const { role, email, regions, unauthorized, canReview } = useAuth()
   const [rows, setRows] = useState([])
+  const [delegateRows, setDelegateRows] = useState([])   // 臨時審核代理人專用：待審核數量
   const [seen, setSeen] = useState(() => loadSeen(email))
   const [seenForEmail, setSeenForEmail] = useState(email)
 
@@ -48,6 +49,15 @@ export function NotificationsProvider({ children }) {
     return () => { unsub(); setRows([]) }
   }, [role, email, regions, unauthorized])
 
+  // 臨時審核代理人（非 manager 但目前被指派代理審核）：額外訂閱待審核數量，跟上面 role 分支的查詢無關。
+  // 不符合條件時不訂閱即可——state 初始值就是 []，切換回不符合條件時前一輪的 cleanup 也會清空，不用在這裡多呼叫一次 setState
+  useEffect(() => {
+    if (role === 'manager' || !canReview) return
+    const q = query(collection(db, 'requests'), where('status', '==', 'pending'))
+    const unsub = onSnapshot(q, snap => setDelegateRows(snap.docs.map(d => ({ id: d.id, ...d.data() }))))
+    return () => { unsub(); setDelegateRows([]) }
+  }, [role, canReview])
+
   function markSeen(id) {
     if (!email) return
     setSeen(prev => {
@@ -58,7 +68,7 @@ export function NotificationsProvider({ children }) {
     })
   }
 
-  const pendingCount = role === 'manager' ? rows.length : 0
+  const pendingCount = role === 'manager' ? rows.length : (canReview ? delegateRows.length : 0)
   const newIds = new Set(
     role === 'manager' ? [] : rows
       .filter(r => ACTIVE.includes(r.status))

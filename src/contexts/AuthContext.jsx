@@ -11,13 +11,19 @@ export function AuthProvider({ children }) {
   const [regions, setRegions] = useState([])    // planner 負責的區域
   const [unauthorized, setUnauthorized] = useState(false) // 已登入但不在白名單/已停用
   const [loading, setLoading] = useState(true)
+  // 臨時審核代理人（settings/reviewDelegation）：manager 休假時可指派同仁暫代需求審核，
+  // 到期時間一到就自動失效（不用手動收回，firestore.rules 用 request.time 比對）
+  const [reviewDelegation, setReviewDelegation] = useState(null)
 
   useEffect(() => {
     let unsubUserDoc = null
+    let unsubDelegation = null
 
     const unsubAuth = onAuthStateChanged(auth, (fbUser) => {
       // 換帳號或登出時，先解除前一個使用者文件的監聽，避免殘留舊角色資料
       if (unsubUserDoc) { unsubUserDoc(); unsubUserDoc = null }
+      if (unsubDelegation) { unsubDelegation(); unsubDelegation = null }
+      setReviewDelegation(null)
 
       if (!fbUser) {
         setUser(null); setRole(null); setRegions([]); setUnauthorized(false); setLoading(false)
@@ -51,24 +57,43 @@ export function AuthProvider({ children }) {
           setUser(fbUser); setRole(null); setRegions([]); setUnauthorized(true); setLoading(false)
         }
       )
+
+      // settings/reviewDelegation 對任何 whitelisted 使用者都可讀，用來判斷「我現在是不是臨時審核代理人」
+      unsubDelegation = onSnapshot(
+        doc(db, 'settings', 'reviewDelegation'),
+        (snap) => setReviewDelegation(snap.exists() ? snap.data() : null),
+        () => setReviewDelegation(null)
+      )
     })
 
     return () => {
       unsubAuth()
       if (unsubUserDoc) unsubUserDoc()
+      if (unsubDelegation) unsubDelegation()
     }
   }, [])
+
+  const myEmail = user?.email ? user.email.trim().toLowerCase() : null
+  const isDelegatedReviewer = !!(
+    reviewDelegation
+    && reviewDelegation.loginEmail === myEmail
+    && reviewDelegation.expiresAt
+    && reviewDelegation.expiresAt.toDate() > new Date()
+  )
 
   const value = {
     user,
     role,
     regions,
-    email: user?.email ? user.email.trim().toLowerCase() : null,
+    email: myEmail,
     isManager: role === 'manager',
     isDesigner: role === 'designer',
     isPlanner: role === 'planner',
     unauthorized,
     loading,
+    reviewDelegation,
+    isDelegatedReviewer,
+    canReview: role === 'manager' || isDelegatedReviewer,
     login: () => signInWithPopup(auth, googleProvider),
     logout: () => signOut(auth),
   }

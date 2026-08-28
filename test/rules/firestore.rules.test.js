@@ -478,6 +478,100 @@ describe('requests 狀態機 — manager 核准/駁回', () => {
   })
 })
 
+describe('臨時審核代理人（settings/reviewDelegation）', () => {
+  async function seedDelegation(loginEmail, expiresAt) {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'settings', 'reviewDelegation'), {
+        loginEmail, personName: loginEmail, expiresAt, grantedBy: MANAGER, grantedAt: Timestamp.now(),
+      })
+    })
+  }
+  const FUTURE = Timestamp.fromDate(new Date(Date.now() + 24 * 3600 * 1000))
+  const PAST = Timestamp.fromDate(new Date(Date.now() - 24 * 3600 * 1000))
+
+  it('只有 manager 能寫 settings/reviewDelegation；designer 不能自己指派自己', async () => {
+    await assertFails(setDoc(doc(dbAs(DESIGNER_A), 'settings', 'reviewDelegation'), {
+      loginEmail: DESIGNER_A, personName: 'A', expiresAt: FUTURE, grantedBy: DESIGNER_A, grantedAt: Timestamp.now(),
+    }))
+    await assertSucceeds(setDoc(doc(dbAs(MANAGER), 'settings', 'reviewDelegation'), {
+      loginEmail: DESIGNER_A, personName: 'A', expiresAt: FUTURE, grantedBy: MANAGER, grantedAt: Timestamp.now(),
+    }))
+  })
+
+  it('沒有代理指派時，designer 不能核准/駁回', async () => {
+    await seedRequest('no-delegation', { submittedBy: PLANNER_SD1, region: 'SD1', status: 'pending', projectName: 'x' })
+    await assertFails(updateDoc(doc(dbAs(DESIGNER_A), 'requests', 'no-delegation'), {
+      status: 'assigned', assignedDesigners: [DESIGNER_A], assignedDesignersNames: ['A'],
+      reviewedBy: DESIGNER_A, reviewedAt: serverTimestamp(), reviewNote: '', comment: '', dueDate: '2026-08-01',
+    }))
+  })
+
+  it('未過期的代理人可以核准（reviewedBy 記錄的是代理人自己的 email，留下審核紀錄）', async () => {
+    await seedDelegation(DESIGNER_A, FUTURE)
+    await seedRequest('delegated-approve', { submittedBy: PLANNER_SD1, region: 'SD1', status: 'pending', projectName: 'x' })
+    await assertSucceeds(updateDoc(doc(dbAs(DESIGNER_A), 'requests', 'delegated-approve'), {
+      status: 'assigned', assignedDesigners: [DESIGNER_A], assignedDesignersNames: ['A'],
+      reviewedBy: DESIGNER_A, reviewedAt: serverTimestamp(), reviewNote: '', comment: '', dueDate: '2026-08-01',
+    }))
+  })
+
+  it('未過期的代理人可以駁回', async () => {
+    await seedDelegation(DESIGNER_A, FUTURE)
+    await seedRequest('delegated-reject', { submittedBy: PLANNER_SD1, region: 'SD1', status: 'pending', projectName: 'x' })
+    await assertSucceeds(updateDoc(doc(dbAs(DESIGNER_A), 'requests', 'delegated-reject'), {
+      status: 'rejected', reviewedBy: DESIGNER_A, reviewedAt: serverTimestamp(), rejectReason: '資訊不足',
+    }))
+  })
+
+  it('已過期的代理指派不能再核准（到期自動失效，不用手動收回）', async () => {
+    await seedDelegation(DESIGNER_A, PAST)
+    await seedRequest('expired-delegation', { submittedBy: PLANNER_SD1, region: 'SD1', status: 'pending', projectName: 'x' })
+    await assertFails(updateDoc(doc(dbAs(DESIGNER_A), 'requests', 'expired-delegation'), {
+      status: 'assigned', assignedDesigners: [DESIGNER_A], assignedDesignersNames: ['A'],
+      reviewedBy: DESIGNER_A, reviewedAt: serverTimestamp(), reviewNote: '', comment: '', dueDate: '2026-08-01',
+    }))
+  })
+
+  it('代理指派給別人時，不會連帶開放給其他 designer', async () => {
+    await seedDelegation(DESIGNER_A, FUTURE)
+    await seedRequest('delegated-to-a-only', { submittedBy: PLANNER_SD1, region: 'SD1', status: 'pending', projectName: 'x' })
+    await assertFails(updateDoc(doc(dbAs(DESIGNER_B), 'requests', 'delegated-to-a-only'), {
+      status: 'assigned', assignedDesigners: [DESIGNER_B], assignedDesignersNames: ['B'],
+      reviewedBy: DESIGNER_B, reviewedAt: serverTimestamp(), reviewNote: '', comment: '', dueDate: '2026-08-01',
+    }))
+  })
+
+  it('代理人不能事後編輯已審核需求（範圍只到核准/駁回，不含 manager 的事後編輯）', async () => {
+    await seedDelegation(DESIGNER_A, FUTURE)
+    await seedRequest('delegated-cannot-meta-edit', { submittedBy: PLANNER_SD1, region: 'SD1', status: 'assigned', projectName: 'x', assignedDesigners: [DESIGNER_B] })
+    await assertFails(updateDoc(doc(dbAs(DESIGNER_A), 'requests', 'delegated-cannot-meta-edit'), {
+      assignedDesigners: [DESIGNER_A], assignedDesignersNames: ['A'], dueDate: '2026-09-01', comment: '', reviewNote: '',
+    }))
+  })
+
+  it('代理人不能標記需求為重要（manager 專屬）', async () => {
+    await seedDelegation(DESIGNER_A, FUTURE)
+    await seedRequest('delegated-cannot-important', { submittedBy: PLANNER_SD1, region: 'SD1', status: 'pending', projectName: 'x' })
+    await assertFails(updateDoc(doc(dbAs(DESIGNER_A), 'requests', 'delegated-cannot-important'), { important: true }))
+  })
+
+  it('代理人可以讀取跟自己完全無關的需求（審核期間要看得到全表）', async () => {
+    await seedDelegation(DESIGNER_A, FUTURE)
+    await seedRequest('unrelated-to-delegate', { submittedBy: PLANNER_SD2, region: 'SD2', status: 'pending', projectName: 'x' })
+    await assertSucceeds(getDoc(doc(dbAs(DESIGNER_A), 'requests', 'unrelated-to-delegate')))
+  })
+
+  it('代理人可以讀取 users 全表（指派設計師/CC planner 的下拉選單需要）', async () => {
+    await seedDelegation(DESIGNER_A, FUTURE)
+    await assertSucceeds(getDoc(doc(dbAs(DESIGNER_A), 'users', PLANNER_SD1)))
+  })
+
+  it('沒有代理指派時，designer 不能讀取跟自己無關的需求（維持原本權限邊界）', async () => {
+    await seedRequest('unrelated-no-delegation', { submittedBy: PLANNER_SD2, region: 'SD2', status: 'pending', projectName: 'x' })
+    await assertFails(getDoc(doc(dbAs(DESIGNER_A), 'requests', 'unrelated-no-delegation')))
+  })
+})
+
 describe('projects / people / leaves / settings / hbl* — 讀白名單、寫僅 manager', () => {
   const collections = ['projects', 'people', 'leaves', 'hblPayments', 'hblSchedule', 'hblAdStatus']
 

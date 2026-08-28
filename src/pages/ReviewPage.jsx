@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { collection, onSnapshot, doc, updateDoc, serverTimestamp } from 'firebase/firestore'
+import { collection, onSnapshot, doc, updateDoc, deleteDoc, setDoc, serverTimestamp, Timestamp } from 'firebase/firestore'
 import { db } from '../firebase'
 import { useAuth } from '../contexts/AuthContext'
 import { statusMeta } from '../utils/requestConstants'
@@ -11,9 +11,14 @@ function fmt(ts) {
   const d = ts.toDate ? ts.toDate() : new Date(ts)
   return d.toLocaleString('zh-TW', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
 }
+function fmtDate(ts) {
+  if (!ts) return '—'
+  const d = ts.toDate ? ts.toDate() : new Date(ts)
+  return d.toLocaleDateString('zh-TW')
+}
 
 export default function ReviewPage() {
-  const { email } = useAuth()
+  const { email, isManager, isDelegatedReviewer, reviewDelegation } = useAuth()
   const [requests, setRequests] = useState([])
   const [designers, setDesigners] = useState([])
   const [planners, setPlanners] = useState([])
@@ -21,6 +26,10 @@ export default function ReviewPage() {
   const [drafts, setDrafts] = useState({})
   const [busy, setBusy] = useState(null)
   const [editing, setEditing] = useState(null) // 非待審核時的編輯中 id
+  const [delegateEmail, setDelegateEmail] = useState('')
+  const [delegateEndDate, setDelegateEndDate] = useState('')
+  const [delegateBusy, setDelegateBusy] = useState(false)
+  const [delegateErr, setDelegateErr] = useState('')
 
   useEffect(() => {
     const u1 = onSnapshot(collection(db, 'requests'), snap => {
@@ -114,6 +123,32 @@ export default function ReviewPage() {
     setBusy(null)
   }
 
+  // 臨時審核代理人：指派/取消（只有 manager 看得到這組操作，firestore.rules 的 settings 寫入也鎖 manager）
+  async function grantDelegation() {
+    setDelegateErr('')
+    if (!delegateEmail) { setDelegateErr('請選擇代理人'); return }
+    if (!delegateEndDate) { setDelegateErr('請選擇到期日'); return }
+    const person = [...designers, ...planners].find(p => p.email === delegateEmail)
+    setDelegateBusy(true)
+    try {
+      await setDoc(doc(db, 'settings', 'reviewDelegation'), {
+        loginEmail: delegateEmail,
+        personName: person?.displayName || delegateEmail,
+        expiresAt: Timestamp.fromDate(new Date(`${delegateEndDate}T23:59:59`)),
+        grantedBy: email,
+        grantedAt: serverTimestamp(),
+      })
+      setDelegateEmail(''); setDelegateEndDate('')
+    } catch (e) { setDelegateErr(e.code || e.message) }
+    setDelegateBusy(false)
+  }
+  async function revokeDelegation() {
+    setDelegateBusy(true)
+    try { await deleteDoc(doc(db, 'settings', 'reviewDelegation')) }
+    catch (e) { setDelegateErr(e.code || e.message) }
+    setDelegateBusy(false)
+  }
+
   const pending = requests.filter(r => r.status === 'pending')
   const shown = tab === 'pending' ? pending : requests
 
@@ -157,10 +192,58 @@ export default function ReviewPage() {
     )
   }
 
+  const delegationActive = !!(reviewDelegation && reviewDelegation.expiresAt && reviewDelegation.expiresAt.toDate() > new Date())
+  const reviewerOptions = [...designers, ...planners]
+
   return (
     <div className="p-8 max-w-4xl mx-auto">
       <h1 className="text-2xl font-bold text-gray-800 mb-1">需求審核</h1>
       <p className="text-sm text-gray-500 mb-5">核准並指派設計師(可多位)、填寫注意事項、可變更交期,或駁回</p>
+
+      {/* 代理審核中的人看到的提示（manager 不會看到，因為 manager 本來就有完整權限） */}
+      {isDelegatedReviewer && !isManager && (
+        <div className="mb-5 text-sm bg-amber-50 border border-amber-200 text-amber-700 rounded-xl px-4 py-2.5">
+          你目前是臨時審核代理人，權限到 {fmtDate(reviewDelegation.expiresAt)} 為止。可以核准/駁回待審核需求，但無法編輯已審核過的需求。
+        </div>
+      )}
+
+      {/* manager 專屬：指派/取消臨時審核代理人 */}
+      {isManager && (
+        <div className="mb-5 bg-white rounded-xl border border-gray-200 p-4">
+          <p className="text-sm font-medium text-gray-700 mb-2">臨時審核代理人</p>
+          {delegationActive ? (
+            <div className="flex flex-wrap items-center gap-3 text-sm">
+              <span className="text-gray-600">
+                目前代理人：<b className="text-gray-800">{reviewDelegation.personName}</b>，到期 {fmtDate(reviewDelegation.expiresAt)}
+              </span>
+              <button onClick={revokeDelegation} disabled={delegateBusy}
+                className="text-red-500 hover:underline disabled:opacity-50">取消代理</button>
+            </div>
+          ) : (
+            <div className="flex flex-wrap items-end gap-2">
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">代理人</label>
+                <select value={delegateEmail} onChange={e => setDelegateEmail(e.target.value)}
+                  className="border border-gray-300 rounded-lg px-3 py-2 text-sm min-w-[160px]">
+                  <option value="">請選擇</option>
+                  {reviewerOptions.map(p => (
+                    <option key={p.email} value={p.email}>{p.displayName || p.email}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">代理到（含當天）</label>
+                <input type="date" value={delegateEndDate} onChange={e => setDelegateEndDate(e.target.value)}
+                  className="border border-gray-300 rounded-lg px-3 py-2 text-sm" />
+              </div>
+              <button onClick={grantDelegation} disabled={delegateBusy}
+                className="bg-gray-800 text-white text-sm px-4 py-2 rounded-lg hover:bg-gray-900 disabled:opacity-50">指派</button>
+              {delegateErr && <p className="text-xs text-red-500 w-full">{delegateErr}</p>}
+            </div>
+          )}
+          <p className="text-xs text-gray-400 mt-2">代理人可以核准/駁回待審核需求，無法編輯已審核過的需求或動用其他主管功能，到期後自動失效。</p>
+        </div>
+      )}
 
       <div className="flex gap-2 mb-5">
         <button onClick={() => setTab('pending')}
@@ -266,7 +349,9 @@ export default function ReviewPage() {
                       {r.reviewNote && <div>審核備註：{r.reviewNote}</div>}
                       {r.comment && <div className="text-amber-700 bg-amber-50 rounded px-2 py-1 inline-block">📌 注意事項：{r.comment}</div>}
                       {r.rejectReason && <div className="text-red-500">駁回原因：{r.rejectReason}</div>}
-                      {r.status !== 'rejected' && (
+                      {/* 事後編輯是 manager 專屬（firestore.rules 的 isManagerMetaEdit 沒開放給代理人），
+                          代理人身分就不顯示這顆按鈕，不然點了也只會被規則擋掉 */}
+                      {r.status !== 'rejected' && isManager && (
                         <button onClick={() => { setEditing(r.id); setDraft(r.id, {}) }}
                           className="text-blue-500 hover:underline mt-1">✎ 編輯指派 / 交期 / 注意事項</button>
                       )}

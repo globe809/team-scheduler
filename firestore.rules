@@ -25,6 +25,17 @@ service cloud.firestore {
     function myRegions() { return udoc().data.get('regions', []); }
     function isManager() { return whitelisted() && role() == 'manager'; }
 
+    // 臨時審核代理人：manager 休假時可在 settings/reviewDelegation 指派同仁暫代需求審核
+    // (見 src/pages/ReviewPage.jsx 的指派/取消 UI，只有 manager 能寫這份文件，見下方 settings 規則)。
+    // 到期時間一到，request.time 比對就自然失效，不需要另外收回。
+    function reviewDelegationDoc() { return get(/databases/$(database)/documents/settings/reviewDelegation); }
+    function isDelegatedReviewer() {
+      return whitelisted()
+        && exists(/databases/$(database)/documents/settings/reviewDelegation)
+        && reviewDelegationDoc().data.loginEmail == email()
+        && request.time < reviewDelegationDoc().data.expiresAt;
+    }
+
     function changedOnly(keys) {
       return request.resource.data.diff(resource.data).affectedKeys().hasOnly(keys);
     }
@@ -172,13 +183,15 @@ service cloud.firestore {
 
     // 使用者名單：自己可讀自己那筆（登入時查角色用）；主管可讀寫全部
     match /users/{uid} {
-      allow read: if signedIn() && (uid == email() || isManager());
+      // 臨時審核代理人也要能讀全表：ReviewPage 的設計師/Planner 指派清單來自 users collection
+      allow read: if signedIn() && (uid == email() || isManager() || isDelegatedReviewer());
       allow write: if isManager();
     }
 
     // 客製化設計需求
     match /requests/{id} {
       allow read: if isManager()
+        || isDelegatedReviewer()                                                          // 臨時審核代理人：審核期間要看得到全表
         || (whitelisted() && resource.data.submittedBy == email())                       // planner 看自己送的
         || (whitelisted() && email() in resource.data.get('assignedDesigners', []))      // designer 看指派給自己的
         || (whitelisted() && resource.data.region in myRegions());                       // planner 看負責區域的
@@ -186,9 +199,13 @@ service cloud.firestore {
       allow create: if whitelisted() && isValidRequestCreate(id);
 
       allow update: if
-          // manager：核准 / 駁回 / 事後編輯 / 標記重要，且 status 必須落在既定 enum 內
-          (isManager() && isValidStatus(request.resource.data.status)
-            && (isApproveTransition() || isRejectTransition() || isManagerMetaEdit() || isImportantToggle()))
+          // manager 或臨時審核代理人：核准 / 駁回，且 status 必須落在既定 enum 內
+          ((isManager() || isDelegatedReviewer()) && isValidStatus(request.resource.data.status)
+            && (isApproveTransition() || isRejectTransition()))
+          // manager 專屬：事後編輯已審核需求的指派/交期/備註、標記重要——刻意不開放給代理人，
+          // 避免代理審核期間動到 manager 自己核准過的舊資料
+          || (isManager() && isValidStatus(request.resource.data.status)
+            && (isManagerMetaEdit() || isImportantToggle()))
           // 設計師：改自己被指派任務的狀態，只能依合法流程單步推進
           || (whitelisted() && email() in resource.data.get('assignedDesigners', []) && isDesignerTransition())
           // planner：只能把「負責區域」且「非 pending/rejected」的需求改成 completed

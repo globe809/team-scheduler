@@ -45,7 +45,7 @@ const ADMIN_ITEMS = [
 ]
 
 export default function Layout() {
-  const { user, role, logout } = useAuth()
+  const { user, role, logout, canReview } = useAuth()
   const { canAccess } = usePermissions()
   const { newCount, pendingCount } = useNotifications()
 
@@ -56,7 +56,9 @@ export default function Layout() {
     return 0
   }
 
-  const visibleNav = PAGES.filter(p => canAccess(p.key, role))
+  // review 是動態例外：manager 固定看得到，非 manager 只有目前被指派為臨時審核代理人才看得到
+  // (canAccess('review', role) 對 designer/planner 恆為 false，因為 pages.js 寫死 fixed:'manager')
+  const visibleNav = PAGES.filter(p => canAccess(p.key, role) || (p.key === 'review' && canReview))
   const navGroups = GROUPS
     .map(g => ({ ...g, items: visibleNav.filter(p => p.group === g.key) }))
     .filter(g => g.items.length > 0)

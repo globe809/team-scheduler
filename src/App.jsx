@@ -48,6 +48,14 @@ function ManagerRoute({ children }) {
   return children
 }
 
+// 需求審核：manager 或目前被指派的臨時審核代理人都能進入（pages.js 仍固定寫 manager，
+// 代理人是動態、有到期時間的例外，刻意不塞進靜態的權限矩陣）
+function ReviewRoute({ children }) {
+  const { canReview } = useAuth()
+  if (!canReview) return <Navigate to="/" replace />
+  return children
+}
+
 // 首頁：所有角色登入後都先落地在「我的儀表板」（登入時的重點資訊，內容依角色分不同區塊）
 function Home() {
   const { role } = useAuth()
@@ -89,7 +97,7 @@ export default function App() {
         <Route path="request/edit/:id" element={<PermRoute pageKey="request/new"><RequestNewPage /></PermRoute>} />
         <Route path="my-requests" element={<PermRoute pageKey="my-requests"><MyRequestsPage /></PermRoute>} />
         <Route path="requests" element={<PermRoute pageKey="requests"><RequestsTablePage /></PermRoute>} />
-        <Route path="review" element={<PermRoute pageKey="review"><ReviewPage /></PermRoute>} />
+        <Route path="review" element={<ReviewRoute><ReviewPage /></ReviewRoute>} />
         <Route path="dashboard" element={<PermRoute pageKey="dashboard"><RequestsDashboardPage /></PermRoute>} />
         {/* 使用者管理已併入「人員管理」，舊書籤導過去 */}
         <Route path="users" element={<Navigate to="/people" replace />} />
