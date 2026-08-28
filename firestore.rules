@@ -25,14 +25,17 @@ service cloud.firestore {
     function myRegions() { return udoc().data.get('regions', []); }
     function isManager() { return whitelisted() && role() == 'manager'; }
 
-    // 臨時審核代理人：manager 休假時可在 settings/reviewDelegation 指派同仁暫代需求審核
-    // (見 src/pages/ReviewPage.jsx 的指派/取消 UI，只有 manager 能寫這份文件，見下方 settings 規則)。
-    // 到期時間一到，request.time 比對就自然失效，不需要另外收回。
+    // 臨時審核代理人：manager 休假時可在 settings/reviewDelegation 指派同仁暫代需求審核，
+    // 起訖日期可以是一個區間(見 src/pages/ReviewPage.jsx 的指派/取消 UI，只有 manager 能寫這份
+    // 文件，見下方 settings 規則)。到期時間一到，request.time 比對就自然失效，不需要另外收回；
+    // startsAt 是選填欄位(get 帶 timestamp.value(0) 當預設值)，沒設定就視為沒有起始限制，
+    // 相容於這個欄位加入之前就存在的舊資料。
     function reviewDelegationDoc() { return get(/databases/$(database)/documents/settings/reviewDelegation); }
     function isDelegatedReviewer() {
       return whitelisted()
         && exists(/databases/$(database)/documents/settings/reviewDelegation)
         && reviewDelegationDoc().data.loginEmail == email()
+        && request.time >= reviewDelegationDoc().data.get('startsAt', timestamp.value(0))
         && request.time < reviewDelegationDoc().data.expiresAt;
     }
 

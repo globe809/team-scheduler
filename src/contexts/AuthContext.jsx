@@ -79,6 +79,8 @@ export function AuthProvider({ children }) {
     && reviewDelegation.loginEmail === myEmail
     && reviewDelegation.expiresAt
     && reviewDelegation.expiresAt.toDate() > new Date()
+    // startsAt 是選填的區間起點；沒設定(舊資料)就視為沒有起始限制
+    && (!reviewDelegation.startsAt || reviewDelegation.startsAt.toDate() <= new Date())
   )
 
   const value = {

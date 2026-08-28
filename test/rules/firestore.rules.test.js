@@ -479,15 +479,18 @@ describe('requests 狀態機 — manager 核准/駁回', () => {
 })
 
 describe('臨時審核代理人（settings/reviewDelegation）', () => {
-  async function seedDelegation(loginEmail, expiresAt) {
+  const FUTURE = Timestamp.fromDate(new Date(Date.now() + 24 * 3600 * 1000))
+  const PAST = Timestamp.fromDate(new Date(Date.now() - 24 * 3600 * 1000))
+
+  // startsAt 預設是「已經開始」(PAST)，維持既有測試案例(只在意到期時間)不用逐一改寫；
+  // 需要測「還沒開始」的案例再明確傳未來的 startsAt
+  async function seedDelegation(loginEmail, expiresAt, startsAt = PAST) {
     await testEnv.withSecurityRulesDisabled(async (ctx) => {
       await setDoc(doc(ctx.firestore(), 'settings', 'reviewDelegation'), {
-        loginEmail, personName: loginEmail, expiresAt, grantedBy: MANAGER, grantedAt: Timestamp.now(),
+        loginEmail, personName: loginEmail, startsAt, expiresAt, grantedBy: MANAGER, grantedAt: Timestamp.now(),
       })
     })
   }
-  const FUTURE = Timestamp.fromDate(new Date(Date.now() + 24 * 3600 * 1000))
-  const PAST = Timestamp.fromDate(new Date(Date.now() - 24 * 3600 * 1000))
 
   it('只有 manager 能寫 settings/reviewDelegation；designer 不能自己指派自己', async () => {
     await assertFails(setDoc(doc(dbAs(DESIGNER_A), 'settings', 'reviewDelegation'), {
@@ -527,6 +530,37 @@ describe('臨時審核代理人（settings/reviewDelegation）', () => {
     await seedDelegation(DESIGNER_A, PAST)
     await seedRequest('expired-delegation', { submittedBy: PLANNER_SD1, region: 'SD1', status: 'pending', projectName: 'x' })
     await assertFails(updateDoc(doc(dbAs(DESIGNER_A), 'requests', 'expired-delegation'), {
+      status: 'assigned', assignedDesigners: [DESIGNER_A], assignedDesignersNames: ['A'],
+      reviewedBy: DESIGNER_A, reviewedAt: serverTimestamp(), reviewNote: '', comment: '', dueDate: '2026-08-01',
+    }))
+  })
+
+  it('起始日排在未來（尚未開始）的代理指派還不能核准', async () => {
+    await seedDelegation(DESIGNER_A, FUTURE, FUTURE)
+    await seedRequest('not-started-delegation', { submittedBy: PLANNER_SD1, region: 'SD1', status: 'pending', projectName: 'x' })
+    await assertFails(updateDoc(doc(dbAs(DESIGNER_A), 'requests', 'not-started-delegation'), {
+      status: 'assigned', assignedDesigners: [DESIGNER_A], assignedDesignersNames: ['A'],
+      reviewedBy: DESIGNER_A, reviewedAt: serverTimestamp(), reviewNote: '', comment: '', dueDate: '2026-08-01',
+    }))
+  })
+
+  it('起始日已過（區間內）的代理指派可以核准', async () => {
+    await seedDelegation(DESIGNER_A, FUTURE, PAST)
+    await seedRequest('started-delegation', { submittedBy: PLANNER_SD1, region: 'SD1', status: 'pending', projectName: 'x' })
+    await assertSucceeds(updateDoc(doc(dbAs(DESIGNER_A), 'requests', 'started-delegation'), {
+      status: 'assigned', assignedDesigners: [DESIGNER_A], assignedDesignersNames: ['A'],
+      reviewedBy: DESIGNER_A, reviewedAt: serverTimestamp(), reviewNote: '', comment: '', dueDate: '2026-08-01',
+    }))
+  })
+
+  it('沒有 startsAt 欄位的舊資料（這個欄位加入之前建立的）視為沒有起始限制，仍可核准', async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'settings', 'reviewDelegation'), {
+        loginEmail: DESIGNER_A, personName: DESIGNER_A, expiresAt: FUTURE, grantedBy: MANAGER, grantedAt: Timestamp.now(),
+      })
+    })
+    await seedRequest('legacy-no-startsat', { submittedBy: PLANNER_SD1, region: 'SD1', status: 'pending', projectName: 'x' })
+    await assertSucceeds(updateDoc(doc(dbAs(DESIGNER_A), 'requests', 'legacy-no-startsat'), {
       status: 'assigned', assignedDesigners: [DESIGNER_A], assignedDesignersNames: ['A'],
       reviewedBy: DESIGNER_A, reviewedAt: serverTimestamp(), reviewNote: '', comment: '', dueDate: '2026-08-01',
     }))
